@@ -1,0 +1,28 @@
+# AirDCCore-macOS
+
+AirDCCore-macOS is the source-acquisition, build, packaging, and verification project for a reproducible AirDC++ Core static distribution targeting macOS on Apple Silicon (`arm64`) only.
+
+The project is currently at a **documented design baseline awaiting user review**. Build scripts, wrappers, patches, dependency builds, the smoke test, and `Dist` have intentionally not been implemented yet.
+
+The authoritative design is [docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md](docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md). Shorter operational summaries live in:
+
+- [docs/architecture.md](docs/architecture.md)
+- [docs/build-and-release.md](docs/build-and-release.md)
+- [docs/dependencies.md](docs/dependencies.md)
+- [docs/git-workflow.md](docs/git-workflow.md)
+- [docs/upstream-policy.md](docs/upstream-policy.md)
+
+## Inspected upstream snapshot
+
+- Repository: <https://github.com/airdcpp/airdcpp-core>
+- Inspected commit: [`55d51ceb817ec006d4ec844d9e3788e1b0ccc352`](https://github.com/airdcpp/airdcpp-core/commit/55d51ceb817ec006d4ec844d9e3788e1b0ccc352)
+- Inspection date: 2026-09-04
+- Local checkout: `Source/airdcpp-core` (downloaded and ignored by this parent repository)
+
+## Scope boundary
+
+This repository will eventually produce headers, static library artifacts, provenance, dependency metadata, checksums, and licenses under `Dist`. It will not contain Objective-C++, Swift, Swift Package Manager integration, AppKit, application architecture, or client UI. Those concerns belong to later projects.
+
+The next step is user review of the design spec. Implementation planning must not begin until that review is approved.
+
+Parent-repository work follows full GitFlow. `develop` is the integration branch and contains this baseline; `master` is reserved for production releases and will be created by the first release flow rather than seeded with design work.

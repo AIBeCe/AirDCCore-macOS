@@ -1,0 +1,9 @@
+.DS_Store
+
+# Reconstructed upstream and dependency source trees.
+/Source/airdcpp-core/
+/Dependencies/
+
+# Generated build and distribution outputs.
+/Build/
+/Dist/
