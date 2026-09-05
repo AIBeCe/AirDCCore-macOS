@@ -33,3 +33,13 @@ Every patch must:
 - be reviewed for upstream submission when generally useful.
 
 Updating the upstream pin is a deliberate change: inspect CMake and license changes, refresh patches, rebuild from clean state, rerun the smoke link, compare link closure, and review provenance before accepting the update.
+
+## Phase 1 command contract
+
+`scripts/update` reads, but never evaluates, `config/upstream.env`. It accepts no arguments and resolves the project root from its own location. Missing checkouts are fetched in a validated reserved temporary acquisition directory at the final checkout path; after the exact commit is verified, that directory is retained as the checkout.
+
+Existing checkouts must be non-symlink Git repositories with exactly the configured `origin`. Tracked, staged, untracked, or unknown ignored content blocks mutation. The two upstream-generated files `airdcpp/core/version.inc` and `airdcpp/core/localization/StringDefs.cpp` are allowed; they are removed only when changing commits to prevent stale generated state.
+
+A clean checkout at another commit fetches and detaches at the pin. A checkout already detached at the pin exits without network access or state changes. Fetch failure leaves an existing HEAD/worktree intact and removes only a validated reserved acquisition directory when acquisition began from a missing destination.
+
+Run `AIRDCCORE_RUN_NETWORK_TESTS=1 ./tests/gate1_network_test.sh` to reconstruct the canonical checkout twice, verify the pin both times, and prove the next update is a no-op.

@@ -26,3 +26,9 @@ This repository will eventually produce headers, static library artifacts, prove
 The next step is user review of the design spec. Implementation planning must not begin until that review is approved.
 
 Parent-repository work follows full GitFlow. `develop` is the integration branch and contains this baseline; `master` is reserved for production releases and will be created by the first release flow rather than seeded with design work.
+
+## Upstream acquisition
+
+Run `./scripts/update` from any directory to acquire or validate the pinned AirDC++ Core checkout. The command reads `config/upstream.env`, accepts no arguments, and leaves a correct checkout detached at the exact configured commit.
+
+The command refuses dirty, symlinked, non-Git, unignored, or wrong-origin destinations. A correct checkout is a no-op and does not contact the network. Run offline tests with `./tests/upstream_config_test.sh` and `./tests/update_test.sh`.
