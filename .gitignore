@@ -1,5 +1,8 @@
 .DS_Store
 
+# Local isolated feature workspaces.
+/.worktrees/
+
 # Reconstructed upstream and dependency source trees.
 /Source/airdcpp-core/
 /Dependencies/
