@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 0 ]; then printf 'usage: %s\n' "$0" >&2; exit 64; fi
+PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+CONFIG_PATH=$PROJECT_ROOT/config/upstream.env
+SOURCE_DIR=$PROJECT_ROOT/Source
+CHECKOUT_DIR=$SOURCE_DIR/airdcpp-core
+. "$PROJECT_ROOT/scripts/lib/upstream.sh"
+
+load_upstream_config "$CONFIG_PATH" || exit 1
+[ ! -L "$CHECKOUT_DIR" ] || update_die "refusing symlinked checkout path: $CHECKOUT_DIR"
+validate_project_layout "$PROJECT_ROOT"
+if [ ! -e "$CHECKOUT_DIR" ]; then
+  acquire_missing_checkout "$SOURCE_DIR" "$CHECKOUT_DIR" "$AIRDCPP_CORE_URL" "$AIRDCPP_CORE_COMMIT"
+  exit 0
+fi
+[ -d "$CHECKOUT_DIR/.git" ] || update_die "$CHECKOUT_DIR exists but is not an AirDC++ Core Git checkout"
+update_die "existing checkout requires identity and cleanliness validation"
