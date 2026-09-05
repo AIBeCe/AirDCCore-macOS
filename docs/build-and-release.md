@@ -15,6 +15,8 @@ No build or release workflow exists at the design-baseline commit.
 7. **Package:** stage headers, libraries, metadata, checksums, and license material into `Dist` only after all preceding gates pass.
 8. **Verify and release:** run architecture, symbol, header, link, provenance, cleanliness, and two-clean-build reproducibility checks.
 
+Gate 1 is exercised by `tests/gate1_network_test.sh`. It is network-opt-in because it moves a validated clean checkout aside, reconstructs the canonical checkout twice, and retains the second verified reconstruction. Offline safety and failure paths are covered by `tests/upstream_config_test.sh` and `tests/update_test.sh`.
+
 No later phase may conceal a failed earlier gate with an undocumented patch or manually copied local artifact.
 
 ## Release evidence
