@@ -83,4 +83,96 @@ fi
 assert_contains "$output" "checkout path changed during acquisition" "publication replacement failure"
 [ -L "$CASE_ROOT/Source/airdcpp-core" ] || fail "publication replacement symlink was changed"
 assert_eq "$(find "$RACE_OUTSIDE_DIR" -mindepth 1 -maxdepth 1 -print)" "" "publication replacement outside directory"
-printf 'PASS: missing checkout acquisition and cleanup\n'
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+mv "$WORK/fixture/remote.git" "$WORK/fixture/remote.offline"
+output=$("$CASE_ROOT/scripts/update")
+assert_contains "$output" "no update required" "offline exact-checkout no-op"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$FIXTURE_PIN" "no-op HEAD"
+mv "$WORK/fixture/remote.offline" "$WORK/fixture/remote.git"
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+git -C "$CASE_ROOT/Source/airdcpp-core" switch -q -c local-at-pin
+output=$("$CASE_ROOT/scripts/update")
+assert_contains "$output" "normalized AirDC++ Core to detached HEAD" "detach normalization"
+if git -C "$CASE_ROOT/Source/airdcpp-core" symbolic-ref -q HEAD >/dev/null; then
+  fail "checkout remained attached to a branch"
+fi
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+printf 'dirty\n' >> "$CASE_ROOT/Source/airdcpp-core/state.txt"
+before=$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)
+if output=$("$CASE_ROOT/scripts/update" 2>&1); then fail "modified checkout succeeded"; fi
+assert_contains "$output" "checkout has unsafe local changes" "modified checkout"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$before" "dirty HEAD preserved"
+assert_eq "$(tail -n 1 "$CASE_ROOT/Source/airdcpp-core/state.txt")" "dirty" "dirty content preserved"
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+printf 'staged\n' >> "$CASE_ROOT/Source/airdcpp-core/state.txt"
+git -C "$CASE_ROOT/Source/airdcpp-core" add state.txt
+before=$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)
+if output=$("$CASE_ROOT/scripts/update" 2>&1); then fail "staged checkout succeeded"; fi
+assert_contains "$output" "<staged changes>" "staged diagnostic"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$before" "staged HEAD preserved"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" diff --cached --name-only)" "state.txt" "staged index preserved"
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+printf 'untracked\n' > "$CASE_ROOT/Source/airdcpp-core/local.txt"
+if output=$("$CASE_ROOT/scripts/update" 2>&1); then fail "untracked checkout succeeded"; fi
+assert_contains "$output" "local.txt" "untracked diagnostic"
+assert_file_present "$CASE_ROOT/Source/airdcpp-core/local.txt"
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+git -C "$CASE_ROOT/Source/airdcpp-core" remote set-url origin file://$WORK/wrong.git
+before=$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)
+if output=$("$CASE_ROOT/scripts/update" 2>&1); then fail "wrong origin succeeded"; fi
+assert_contains "$output" "origin URL does not match configured upstream" "wrong origin"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" remote get-url origin)" "file://$WORK/wrong.git" "origin preserved"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$before" "wrong-origin HEAD preserved"
+
+new_case
+printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' "$FIXTURE_URL" "$FIXTURE_LATER" > "$CASE_ROOT/config/upstream.env"
+"$CASE_ROOT/scripts/update" >/dev/null
+mkdir -p "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/localization"
+printf 'generated\n' > "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+printf 'generated\n' > "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/localization/StringDefs.cpp"
+printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' "$FIXTURE_URL" "$FIXTURE_PIN" > "$CASE_ROOT/config/upstream.env"
+output=$("$CASE_ROOT/scripts/update")
+assert_contains "$output" "updated AirDC++ Core from $FIXTURE_LATER to $FIXTURE_PIN" "convergence"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$FIXTURE_PIN" "converged HEAD"
+assert_file_absent "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+assert_file_absent "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/localization/StringDefs.cpp"
+
+new_case
+printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' "$FIXTURE_URL" "$FIXTURE_LATER" > "$CASE_ROOT/config/upstream.env"
+"$CASE_ROOT/scripts/update" >/dev/null
+old_head=$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)
+mv "$WORK/fixture/remote.git" "$WORK/fixture/remote.offline"
+printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' "$FIXTURE_URL" "$FIXTURE_PIN" > "$CASE_ROOT/config/upstream.env"
+if output=$("$CASE_ROOT/scripts/update" 2>&1); then fail "fetch failure succeeded"; fi
+assert_contains "$output" "failed to fetch pinned commit" "existing fetch failure"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$old_head" "fetch-failure HEAD"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" status --porcelain=v1 --untracked-files=all)" "" "fetch-failure worktree"
+mv "$WORK/fixture/remote.offline" "$WORK/fixture/remote.git"
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+mkdir -p "$CASE_ROOT/Source/airdcpp-core/airdcpp/core"
+printf 'generated\n' > "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+output=$("$CASE_ROOT/scripts/update")
+assert_contains "$output" "no update required" "known generated file allowed"
+assert_file_present "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+
+new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+printf 'unknown\n' > "$CASE_ROOT/Source/airdcpp-core/EN_Example.xml"
+if output=$("$CASE_ROOT/scripts/update" 2>&1); then fail "unknown ignored file succeeded"; fi
+assert_contains "$output" "EN_Example.xml" "unknown ignored diagnostic"
+assert_file_present "$CASE_ROOT/Source/airdcpp-core/EN_Example.xml"
+printf 'PASS: upstream update workflow\n'
