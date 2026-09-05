@@ -16,4 +16,4 @@ if [ ! -e "$CHECKOUT_DIR" ]; then
   exit 0
 fi
 [ -d "$CHECKOUT_DIR/.git" ] || update_die "$CHECKOUT_DIR exists but is not an AirDC++ Core Git checkout"
-update_die "existing checkout requires identity and cleanliness validation"
+update_existing_checkout "$CHECKOUT_DIR" "$AIRDCPP_CORE_URL" "$AIRDCPP_CORE_COMMIT"

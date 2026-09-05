@@ -127,3 +127,62 @@ acquire_missing_checkout() {
   trap - 0 1 2 15
   printf 'update: acquired AirDC++ Core at %s\n' "$upstream_commit"
 }
+
+checkout_changes() {
+  inspected_checkout=$1
+  git -C "$inspected_checkout" diff --quiet -- || printf '%s\n' '<modified tracked files>'
+  git -C "$inspected_checkout" diff --cached --quiet -- || printf '%s\n' '<staged changes>'
+  git -C "$inspected_checkout" ls-files --others --exclude-standard
+  git -C "$inspected_checkout" ls-files --others --ignored --exclude-standard |
+    while IFS= read -r ignored_path; do
+      case "$ignored_path" in
+        airdcpp/core/version.inc|airdcpp/core/localization/StringDefs.cpp) ;;
+        *) printf '%s\n' "$ignored_path" ;;
+      esac
+    done
+}
+
+validate_checkout_origin() {
+  inspected_checkout=$1
+  expected_url=$2
+  origin_urls=$(git -C "$inspected_checkout" remote get-url --all origin 2>/dev/null) ||
+    update_die "checkout has no origin remote"
+  [ "$origin_urls" = "$expected_url" ] ||
+    update_die "origin URL does not match configured upstream (expected $expected_url)"
+}
+
+remove_known_generated_files() {
+  inspected_checkout=$1
+  rm -f -- "$inspected_checkout/airdcpp/core/version.inc" \
+    "$inspected_checkout/airdcpp/core/localization/StringDefs.cpp"
+}
+
+update_existing_checkout() {
+  checkout_dir=$1
+  upstream_url=$2
+  upstream_commit=$3
+  validate_checkout_origin "$checkout_dir" "$upstream_url"
+  unsafe_changes=$(checkout_changes "$checkout_dir")
+  [ -z "$unsafe_changes" ] || update_die "checkout has unsafe local changes:\n$unsafe_changes"
+  current_commit=$(git -C "$checkout_dir" rev-parse HEAD 2>/dev/null) || update_die "failed to resolve checkout HEAD"
+
+  if [ "$current_commit" = "$upstream_commit" ]; then
+    if git -C "$checkout_dir" symbolic-ref -q HEAD >/dev/null; then
+      git -C "$checkout_dir" checkout -q --detach "$upstream_commit" || update_die "failed to detach at pin"
+      printf 'update: normalized AirDC++ Core to detached HEAD at %s\n' "$upstream_commit"
+    else
+      printf 'update: AirDC++ Core is already at pinned commit %s; no update required\n' "$upstream_commit"
+    fi
+    return 0
+  fi
+
+  git -C "$checkout_dir" fetch -q --no-tags --depth=1 origin "$upstream_commit" ||
+    update_die "failed to fetch pinned commit $upstream_commit from $upstream_url"
+  fetched_commit=$(git -C "$checkout_dir" rev-parse FETCH_HEAD 2>/dev/null) || update_die "failed to resolve fetched commit"
+  [ "$fetched_commit" = "$upstream_commit" ] || update_die "fetched commit does not match pin $upstream_commit"
+  remove_known_generated_files "$checkout_dir"
+  git -C "$checkout_dir" checkout -q --detach "$upstream_commit" || update_die "failed to check out pin"
+  [ "$(git -C "$checkout_dir" rev-parse HEAD)" = "$upstream_commit" ] || update_die "checkout HEAD mismatch"
+  [ -z "$(checkout_changes "$checkout_dir")" ] || update_die "checkout is not clean after update"
+  printf 'update: updated AirDC++ Core from %s to %s\n' "$current_commit" "$upstream_commit"
+}
