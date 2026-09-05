@@ -60,7 +60,7 @@ create_case_project() {
   git -C "$case_root" init -q
 }
 
-create_git_race_wrapper() {
+create_race_wrappers() {
   wrapper_dir=$1
   mkdir -p "$wrapper_dir"
   printf '%s\n' \
@@ -71,17 +71,22 @@ create_git_race_wrapper() {
     '    case " $* " in' \
     '      *" checkout "*)' \
     '        "$RACE_REAL_GIT" "$@"' \
+    '        rm -rf -- "$RACE_CHECKOUT_DIR"' \
     '        ln -s "$RACE_OUTSIDE_DIR" "$RACE_CHECKOUT_DIR"' \
     '        exit 0 ;;' \
     '    esac ;;' \
     '  cleanup)' \
     '    case " $* " in' \
     '      *" fetch "*)' \
-    '        [ "$1" = "-C" ] || exit 97' \
-    '        rm -rf -- "$2"' \
-    '        mkdir -p "$2"' \
-    '        printf "replacement\\n" > "$2/replacement"' \
-    '        exit 1 ;;' \
+    '        marker=$(find "$PWD" -maxdepth 1 -type f -name ".airdcpp-core.owner.*" -print -quit)' \
+    '        [ -n "$marker" ] || exit 98' \
+    '        cp "$marker" "$RACE_MARKER_COPY"' \
+    '        rm -rf -- "$RACE_CHECKOUT_DIR"' \
+    '        mkdir -p "$RACE_CHECKOUT_DIR"' \
+    '        cp "$RACE_MARKER_COPY" "$RACE_CHECKOUT_DIR/$(basename "$marker")"' \
+    '        printf "replacement\\n" > "$RACE_CHECKOUT_DIR/replacement"' \
+    '        "$RACE_REAL_GIT" "$@"' \
+    '        exit $? ;;' \
     '    esac ;;' \
     'esac' \
     'exec "$RACE_REAL_GIT" "$@"' > "$wrapper_dir/git"
