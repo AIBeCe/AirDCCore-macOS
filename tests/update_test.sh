@@ -137,6 +137,21 @@ assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" remote get-url origin)" "fi
 assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$before" "wrong-origin HEAD preserved"
 
 new_case
+"$CASE_ROOT/scripts/update" >/dev/null
+extra_origin=file://$WORK/malicious.git
+git -C "$CASE_ROOT/Source/airdcpp-core" remote set-url --add origin "$extra_origin"
+before=$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)
+before_status=$(git -C "$CASE_ROOT/Source/airdcpp-core" status --porcelain=v1 --untracked-files=all)
+before_origins=$(git -C "$CASE_ROOT/Source/airdcpp-core" remote get-url --all origin)
+if output=$("$CASE_ROOT/scripts/update" 2>&1); then fail "extra origin URL succeeded"; fi
+assert_contains "$output" "origin URL does not match configured upstream" "extra origin rejection"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" rev-parse HEAD)" "$before" "extra origin HEAD preserved"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" status --porcelain=v1 --untracked-files=all)" "$before_status" \
+  "extra origin worktree preserved"
+assert_eq "$(git -C "$CASE_ROOT/Source/airdcpp-core" remote get-url --all origin)" "$before_origins" \
+  "extra origin URLs preserved in order"
+
+new_case
 printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' "$FIXTURE_URL" "$FIXTURE_LATER" > "$CASE_ROOT/config/upstream.env"
 "$CASE_ROOT/scripts/update" >/dev/null
 mkdir -p "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/localization"
@@ -163,11 +178,13 @@ mv "$WORK/fixture/remote.offline" "$WORK/fixture/remote.git"
 
 new_case
 "$CASE_ROOT/scripts/update" >/dev/null
-mkdir -p "$CASE_ROOT/Source/airdcpp-core/airdcpp/core"
+mkdir -p "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/localization"
 printf 'generated\n' > "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+printf 'generated\n' > "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/localization/StringDefs.cpp"
 output=$("$CASE_ROOT/scripts/update")
 assert_contains "$output" "no update required" "known generated file allowed"
 assert_file_present "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+assert_file_present "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/localization/StringDefs.cpp"
 
 new_case
 "$CASE_ROOT/scripts/update" >/dev/null
