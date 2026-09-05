@@ -55,4 +55,29 @@ assert_contains "$output" "usage:" "argument rejection"
 new_case
 output=$(CDPATH= cd -- "$WORK" && "$CASE_ROOT/scripts/update")
 assert_contains "$output" "acquired AirDC++ Core at $FIXTURE_PIN" "other working directory"
+
+REAL_GIT=$(command -v git)
+RACE_BIN=$WORK/race-bin
+create_git_race_wrapper "$RACE_BIN"
+
+new_case
+if output=$(RACE_MODE=cleanup RACE_REAL_GIT="$REAL_GIT" PATH="$RACE_BIN:$PATH" \
+  "$CASE_ROOT/scripts/update" 2>&1); then
+  fail "staging replacement fetch succeeded"
+fi
+assert_contains "$output" "failed to fetch pinned commit" "staging replacement failure"
+replacement_paths=$(find "$CASE_ROOT/Source" -maxdepth 2 -type f -name replacement -print)
+assert_contains "$replacement_paths" "$CASE_ROOT/Source/.airdcpp-core.update." "staging replacement preserved"
+
+new_case
+RACE_OUTSIDE_DIR=$CASE_ROOT/outside
+mkdir -p "$RACE_OUTSIDE_DIR"
+if output=$(RACE_MODE=publication RACE_REAL_GIT="$REAL_GIT" RACE_OUTSIDE_DIR="$RACE_OUTSIDE_DIR" \
+  RACE_CHECKOUT_DIR="$CASE_ROOT/Source/airdcpp-core" PATH="$RACE_BIN:$PATH" \
+  "$CASE_ROOT/scripts/update" 2>&1); then
+  fail "publication replacement succeeded"
+fi
+assert_contains "$output" "checkout path appeared during acquisition" "publication replacement failure"
+[ -L "$CASE_ROOT/Source/airdcpp-core" ] || fail "publication replacement symlink was changed"
+assert_eq "$(find "$RACE_OUTSIDE_DIR" -mindepth 1 -maxdepth 1 -print)" "" "publication replacement outside directory"
 printf 'PASS: missing checkout acquisition and cleanup\n'

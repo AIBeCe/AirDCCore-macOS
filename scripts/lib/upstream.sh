@@ -64,9 +64,15 @@ validate_project_layout() {
 }
 
 cleanup_staging_checkout() {
-  if [ -n "${UPDATE_STAGING_DIR:-}" ] && [ -n "${UPDATE_SOURCE_DIR:-}" ]; then
+  if [ -n "${UPDATE_STAGING_DIR:-}" ] && [ -n "${UPDATE_SOURCE_DIR:-}" ] &&
+    [ -n "${UPDATE_STAGING_MARKER:-}" ]; then
     case "$UPDATE_STAGING_DIR" in
-      "$UPDATE_SOURCE_DIR"/.airdcpp-core.update.*) rm -rf -- "$UPDATE_STAGING_DIR" ;;
+      "$UPDATE_SOURCE_DIR"/.airdcpp-core.update.*)
+        case "$UPDATE_STAGING_MARKER" in
+          "$UPDATE_STAGING_DIR"/.airdcpp-core.owner.*)
+            [ -f "$UPDATE_STAGING_MARKER" ] && rm -rf -- "$UPDATE_STAGING_DIR" ;;
+          *) printf 'update: error: refusing unsafe staging cleanup marker: %s\n' "$UPDATE_STAGING_MARKER" >&2 ;;
+        esac ;;
       *) printf 'update: error: refusing unsafe staging cleanup path: %s\n' "$UPDATE_STAGING_DIR" >&2 ;;
     esac
   fi
@@ -78,8 +84,12 @@ acquire_missing_checkout() {
   upstream_url=$3
   upstream_commit=$4
   UPDATE_STAGING_DIR=$UPDATE_SOURCE_DIR/.airdcpp-core.update.$$
+  UPDATE_STAGING_MARKER=
   [ ! -e "$UPDATE_STAGING_DIR" ] || update_die "staging path already exists: $UPDATE_STAGING_DIR"
   trap cleanup_staging_checkout 0 1 2 15
+  mkdir "$UPDATE_STAGING_DIR" || update_die "failed to initialize staging checkout"
+  UPDATE_STAGING_MARKER=$(mktemp "$UPDATE_STAGING_DIR/.airdcpp-core.owner.XXXXXX") ||
+    update_die "failed to mark staging checkout"
   git init -q "$UPDATE_STAGING_DIR" || update_die "failed to initialize staging checkout"
   git -C "$UPDATE_STAGING_DIR" remote add origin "$upstream_url" || update_die "failed to configure upstream origin"
   git -C "$UPDATE_STAGING_DIR" fetch -q --no-tags --depth=1 origin "$upstream_commit" ||
@@ -88,8 +98,11 @@ acquire_missing_checkout() {
   [ "$fetched_commit" = "$upstream_commit" ] || update_die "fetched commit does not match pin $upstream_commit"
   git -C "$UPDATE_STAGING_DIR" checkout -q --detach "$upstream_commit" || update_die "failed to check out pin"
   [ "$(git -C "$UPDATE_STAGING_DIR" rev-parse HEAD)" = "$upstream_commit" ] || update_die "staged HEAD mismatch"
+  [ ! -e "$checkout_dir" ] && [ ! -L "$checkout_dir" ] ||
+    update_die "checkout path appeared during acquisition: $checkout_dir"
   mv "$UPDATE_STAGING_DIR" "$checkout_dir" || update_die "failed to publish checkout at $checkout_dir"
   UPDATE_STAGING_DIR=
+  UPDATE_STAGING_MARKER=
   trap - 0 1 2 15
   printf 'update: acquired AirDC++ Core at %s\n' "$upstream_commit"
 }
