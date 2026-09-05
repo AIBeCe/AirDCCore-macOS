@@ -63,46 +63,67 @@ validate_project_layout() {
     update_die "Source/airdcpp-core must be ignored by the parent repository"
 }
 
-cleanup_staging_checkout() {
-  if [ -n "${UPDATE_STAGING_DIR:-}" ] && [ -n "${UPDATE_SOURCE_DIR:-}" ] &&
-    [ -n "${UPDATE_STAGING_MARKER:-}" ]; then
-    case "$UPDATE_STAGING_DIR" in
-      "$UPDATE_SOURCE_DIR"/.airdcpp-core.update.*)
-        case "$UPDATE_STAGING_MARKER" in
-          "$UPDATE_STAGING_DIR"/.airdcpp-core.owner.*)
-            [ -f "$UPDATE_STAGING_MARKER" ] && rm -rf -- "$UPDATE_STAGING_DIR" ;;
-          *) printf 'update: error: refusing unsafe staging cleanup marker: %s\n' "$UPDATE_STAGING_MARKER" >&2 ;;
-        esac ;;
-      *) printf 'update: error: refusing unsafe staging cleanup path: %s\n' "$UPDATE_STAGING_DIR" >&2 ;;
-    esac
+path_identity() {
+  [ ! -L "$1" ] || return 1
+  stat -f '%d:%i' "$1" 2>/dev/null
+}
+
+owned_checkout_is_current() {
+  [ -d "$UPDATE_ACQUISITION_DIR" ] &&
+    [ "$(path_identity "$UPDATE_ACQUISITION_DIR")" = "$UPDATE_ACQUISITION_DIR_ID" ] &&
+    [ -f "$UPDATE_ACQUISITION_MARKER" ] &&
+    [ ! -L "$UPDATE_ACQUISITION_MARKER" ] &&
+    [ "$(path_identity "$UPDATE_ACQUISITION_MARKER")" = "$UPDATE_ACQUISITION_MARKER_ID" ]
+}
+
+cleanup_owned_checkout() {
+  [ "${UPDATE_ACQUISITION_CWD:-0}" = 1 ] || return
+  if ! owned_checkout_is_current; then
+    printf 'update: error: refusing cleanup because checkout ownership changed: %s\n' \
+      "$UPDATE_ACQUISITION_DIR" >&2
+    return
+  fi
+
+  rm -rf -- ./* ./.[!.]* ./..?*
+  if ! rmdir "$UPDATE_ACQUISITION_DIR"; then
+    printf 'update: error: leaving validated empty acquisition directory: %s\n' \
+      "$UPDATE_ACQUISITION_DIR" >&2
   fi
 }
 
 acquire_missing_checkout() {
   UPDATE_SOURCE_DIR=$1
-  checkout_dir=$2
+  UPDATE_ACQUISITION_DIR=$2
   upstream_url=$3
   upstream_commit=$4
-  UPDATE_STAGING_DIR=$UPDATE_SOURCE_DIR/.airdcpp-core.update.$$
-  UPDATE_STAGING_MARKER=
-  [ ! -e "$UPDATE_STAGING_DIR" ] || update_die "staging path already exists: $UPDATE_STAGING_DIR"
-  trap cleanup_staging_checkout 0 1 2 15
-  mkdir "$UPDATE_STAGING_DIR" || update_die "failed to initialize staging checkout"
-  UPDATE_STAGING_MARKER=$(mktemp "$UPDATE_STAGING_DIR/.airdcpp-core.owner.XXXXXX") ||
-    update_die "failed to mark staging checkout"
-  git init -q "$UPDATE_STAGING_DIR" || update_die "failed to initialize staging checkout"
-  git -C "$UPDATE_STAGING_DIR" remote add origin "$upstream_url" || update_die "failed to configure upstream origin"
-  git -C "$UPDATE_STAGING_DIR" fetch -q --no-tags --depth=1 origin "$upstream_commit" ||
+  UPDATE_ACQUISITION_CWD=0
+  mkdir "$UPDATE_ACQUISITION_DIR" ||
+    update_die "checkout path appeared during acquisition: $UPDATE_ACQUISITION_DIR"
+  cd "$UPDATE_ACQUISITION_DIR" || update_die "failed to enter reserved checkout directory"
+  UPDATE_ACQUISITION_CWD=1
+  UPDATE_ACQUISITION_MARKER=$(mktemp '.airdcpp-core.owner.XXXXXX') ||
+    update_die "failed to mark reserved checkout directory"
+  UPDATE_ACQUISITION_DIR_ID=$(path_identity .) || update_die "failed to identify reserved checkout directory"
+  UPDATE_ACQUISITION_MARKER_ID=$(path_identity "$UPDATE_ACQUISITION_MARKER") ||
+    update_die "failed to identify reserved checkout marker"
+  trap cleanup_owned_checkout 0 1 2 15
+  git -C . init -q || update_die "failed to initialize checkout"
+  owned_checkout_is_current || update_die "checkout path changed during acquisition: $UPDATE_ACQUISITION_DIR"
+  git -C . remote add origin "$upstream_url" || update_die "failed to configure upstream origin"
+  owned_checkout_is_current || update_die "checkout path changed during acquisition: $UPDATE_ACQUISITION_DIR"
+  if ! git -C . fetch -q --no-tags --depth=1 origin "$upstream_commit"; then
+    owned_checkout_is_current || update_die "checkout path changed during acquisition: $UPDATE_ACQUISITION_DIR"
     update_die "failed to fetch pinned commit $upstream_commit from $upstream_url"
-  fetched_commit=$(git -C "$UPDATE_STAGING_DIR" rev-parse FETCH_HEAD) || update_die "failed to resolve fetched commit"
+  fi
+  owned_checkout_is_current || update_die "checkout path changed during acquisition: $UPDATE_ACQUISITION_DIR"
+  fetched_commit=$(git -C . rev-parse FETCH_HEAD) || update_die "failed to resolve fetched commit"
   [ "$fetched_commit" = "$upstream_commit" ] || update_die "fetched commit does not match pin $upstream_commit"
-  git -C "$UPDATE_STAGING_DIR" checkout -q --detach "$upstream_commit" || update_die "failed to check out pin"
-  [ "$(git -C "$UPDATE_STAGING_DIR" rev-parse HEAD)" = "$upstream_commit" ] || update_die "staged HEAD mismatch"
-  [ ! -e "$checkout_dir" ] && [ ! -L "$checkout_dir" ] ||
-    update_die "checkout path appeared during acquisition: $checkout_dir"
-  mv "$UPDATE_STAGING_DIR" "$checkout_dir" || update_die "failed to publish checkout at $checkout_dir"
-  UPDATE_STAGING_DIR=
-  UPDATE_STAGING_MARKER=
+  git -C . checkout -q --detach "$upstream_commit" || update_die "failed to check out pin"
+  owned_checkout_is_current || update_die "checkout path changed during acquisition: $UPDATE_ACQUISITION_DIR"
+  [ "$(git -C . rev-parse HEAD)" = "$upstream_commit" ] || update_die "staged HEAD mismatch"
+  owned_checkout_is_current || update_die "checkout path changed during acquisition: $UPDATE_ACQUISITION_DIR"
+  rm -f -- "$UPDATE_ACQUISITION_MARKER" || update_die "failed to remove acquisition marker"
+  UPDATE_ACQUISITION_CWD=0
   trap - 0 1 2 15
   printf 'update: acquired AirDC++ Core at %s\n' "$upstream_commit"
 }
