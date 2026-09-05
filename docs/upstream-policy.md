@@ -4,7 +4,7 @@ The authoritative policy is in [the design spec](superpowers/specs/2026-09-04-ai
 
 ## Source identity
 
-AirDC++ Core is acquired from `https://github.com/airdcpp/airdcpp-core.git` at an exact full commit recorded in future `config/upstream.env`. Branch names are informational and must never be the reproducibility boundary.
+AirDC++ Core is acquired from `https://github.com/airdcpp/airdcpp-core.git` at an exact full commit recorded in `config/upstream.env`. Branch names are informational and must never be the reproducibility boundary.
 
 The design inspection used:
 
@@ -16,7 +16,7 @@ The design inspection used:
 
 ## Checkout rules
 
-`Source/airdcpp-core` is a disposable, ignored checkout. The future update workflow must fetch the configured commit, verify `HEAD`, reject unapproved local changes, and be safe to rerun. It must not use Git submodules or commit upstream files into this parent repository.
+`Source/airdcpp-core` is a disposable, ignored checkout. The update workflow fetches the configured commit, verifies `HEAD`, rejects unapproved local changes, and is safe to rerun. It must not use Git submodules or commit upstream files into this parent repository.
 
 Upstream generation currently writes ignored `airdcpp/core/version.inc` and `airdcpp/core/localization/StringDefs.cpp` into the checkout. Build and clean workflows must account for those known generated files without masking unrelated modifications.
 

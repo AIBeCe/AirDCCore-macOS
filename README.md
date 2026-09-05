@@ -2,7 +2,7 @@
 
 AirDCCore-macOS is the source-acquisition, build, packaging, and verification project for a reproducible AirDC++ Core static distribution targeting macOS on Apple Silicon (`arm64`) only.
 
-The project is currently at a **documented design baseline awaiting user review**. Build scripts, wrappers, patches, dependency builds, the smoke test, and `Dist` have intentionally not been implemented yet.
+Phase 1 upstream acquisition is implemented and covered by its configuration and verification tests. Build scripts beyond acquisition, wrappers, patches, dependency builds, the smoke test, and `Dist` remain intentionally unimplemented.
 
 The authoritative design is [docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md](docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md). Shorter operational summaries live in:
 
@@ -23,7 +23,7 @@ The authoritative design is [docs/superpowers/specs/2026-09-04-airdc-core-macos-
 
 This repository will eventually produce headers, static library artifacts, provenance, dependency metadata, checksums, and licenses under `Dist`. It will not contain Objective-C++, Swift, Swift Package Manager integration, AppKit, application architecture, or client UI. Those concerns belong to later projects.
 
-The next step is user review of the design spec. Implementation planning must not begin until that review is approved.
+The next step is user review of the design spec before planning later phases. Those phases must not begin until that review is approved.
 
 Parent-repository work follows full GitFlow. `develop` is the integration branch and contains this baseline; `master` is reserved for production releases and will be created by the first release flow rather than seeded with design work.
 
