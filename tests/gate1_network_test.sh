@@ -4,18 +4,25 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 . "$ROOT/tests/test_helper.sh"
 PIN=55d51ceb817ec006d4ec844d9e3788e1b0ccc352
+CANONICAL_ORIGIN=https://github.com/airdcpp/airdcpp-core.git
+SOURCE_DIR=$ROOT/Source
 CHECKOUT=$ROOT/Source/airdcpp-core
-WORK=$(new_temp_dir)
 . "$ROOT/scripts/lib/upstream.sh"
-ORIGINAL=$WORK/original-airdcpp-core
-FIRST=$WORK/first-reconstruction
-completed=0
 
 [ "${AIRDCCORE_RUN_NETWORK_TESTS:-0}" = 1 ] ||
   fail "set AIRDCCORE_RUN_NETWORK_TESTS=1 to run the real upstream Gate 1 test"
 [ "$(git -C "$ROOT" rev-parse --show-toplevel)" = "$ROOT" ] || fail "project root validation failed"
 git -C "$ROOT" check-ignore -q -- Source/airdcpp-core/ || fail "Source/airdcpp-core is not ignored"
+[ ! -L "$SOURCE_DIR" ] || fail "refusing symlinked Source directory"
 [ ! -L "$CHECKOUT" ] || fail "refusing symlinked checkout"
+load_upstream_config "$ROOT/config/upstream.env"
+assert_eq "$AIRDCPP_CORE_URL" "$CANONICAL_ORIGIN" "manifest URL"
+assert_eq "$AIRDCPP_CORE_COMMIT" "$PIN" "manifest commit"
+
+WORK=$(new_temp_dir)
+ORIGINAL=$WORK/original-airdcpp-core
+FIRST=$WORK/first-reconstruction
+completed=0
 
 restore_on_failure() {
   [ "$completed" -eq 1 ] && return 0
@@ -37,11 +44,13 @@ fi
 first_output=$("$ROOT/scripts/update")
 assert_contains "$first_output" "acquired AirDC++ Core at $PIN" "first reconstruction"
 assert_eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$PIN" "first reconstruction HEAD"
+assert_eq "$(git -C "$CHECKOUT" remote get-url origin)" "$CANONICAL_ORIGIN" "first reconstruction origin"
 mv "$CHECKOUT" "$FIRST"
 
 second_output=$("$ROOT/scripts/update")
 assert_contains "$second_output" "acquired AirDC++ Core at $PIN" "second reconstruction"
 assert_eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$PIN" "second reconstruction HEAD"
+assert_eq "$(git -C "$CHECKOUT" remote get-url origin)" "$CANONICAL_ORIGIN" "second reconstruction origin"
 
 before_head=$(git -C "$CHECKOUT" rev-parse HEAD)
 before_status=$(git -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)
