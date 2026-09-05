@@ -59,3 +59,31 @@ create_case_project() {
     "$fixture_url" "$fixture_commit" > "$case_root/config/upstream.env"
   git -C "$case_root" init -q
 }
+
+create_git_race_wrapper() {
+  wrapper_dir=$1
+  mkdir -p "$wrapper_dir"
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'case "${RACE_MODE:-}" in' \
+    '  publication)' \
+    '    case " $* " in' \
+    '      *" checkout "*)' \
+    '        "$RACE_REAL_GIT" "$@"' \
+    '        ln -s "$RACE_OUTSIDE_DIR" "$RACE_CHECKOUT_DIR"' \
+    '        exit 0 ;;' \
+    '    esac ;;' \
+    '  cleanup)' \
+    '    case " $* " in' \
+    '      *" fetch "*)' \
+    '        [ "$1" = "-C" ] || exit 97' \
+    '        rm -rf -- "$2"' \
+    '        mkdir -p "$2"' \
+    '        printf "replacement\\n" > "$2/replacement"' \
+    '        exit 1 ;;' \
+    '    esac ;;' \
+    'esac' \
+    'exec "$RACE_REAL_GIT" "$@"' > "$wrapper_dir/git"
+  chmod +x "$wrapper_dir/git"
+}
