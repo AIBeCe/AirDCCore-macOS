@@ -22,6 +22,24 @@ assert_contains() {
   esac
 }
 
+assert_not_contains() {
+  haystack=$1
+  needle=$2
+  label=$3
+  case "$haystack" in
+    *"$needle"*) fail "$label: unexpected output containing [$needle]" ;;
+  esac
+}
+
+assert_dir_absent() { [ ! -d "$1" ] || fail "expected absent directory: $1"; }
+
+assert_line() {
+  file=$1
+  line=$2
+  label=$3
+  grep -Fqx -- "$line" "$file" || fail "$label: missing exact line [$line] in $file"
+}
+
 assert_file_absent() { [ ! -e "$1" ] || fail "expected absent path: $1"; }
 assert_file_present() { [ -e "$1" ] || fail "expected existing path: $1"; }
 new_temp_dir() { mktemp -d "${TMPDIR:-/tmp}/airdc-core-tests.XXXXXX"; }
