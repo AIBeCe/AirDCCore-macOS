@@ -81,13 +81,15 @@ Build/gate2/homebrew-formulae.tsv
 Build/gate2/raw/configure.command
 Build/gate2/raw/configure.log
 Build/gate2/raw/configure.status
+Build/gate2/raw/upstream-head
+Build/gate2/raw/upstream-cmake.sha256
 Build/gate2/package-resolution.tsv
 Build/gate2/wrapped-configure.log
 Build/gate2/wrapped-configure.status
 Build/airdcpp-core/
 ```
 
-Each TSV is sorted by its first field and uses tabs. Status files contain one decimal exit code plus a newline. `configure.command` is a shell-escaped diagnostic record, not an executable script. Reruns replace these known files atomically through sibling `.tmp.$$` files and never append stale evidence.
+Each TSV is sorted by its first field and uses tabs. Status files contain one decimal exit code plus a newline. `configure.command` is a shell-escaped diagnostic record, not an executable script. The first raw command/log/status and its upstream HEAD/CMake hash are immutable for the pinned input: reruns verify and reuse them byte-for-byte. Other evidence is replaced atomically through sibling `.tmp.$$` files and never appends stale output. If the stored raw identity differs from the current pin or upstream CMake hash, fail with an instruction to preserve/move `Build/gate2/raw` for review rather than overwrite it.
 
 ### Task 1: Add strict native-discovery policy and normalized host inventory
 
@@ -442,7 +444,7 @@ Assert a run creates all stable evidence paths, preserves raw status `1` and its
 -DCMAKE_TOOLCHAIN_FILE=<PROJECT_ROOT>/cmake/toolchains/macos-arm64.cmake
 ```
 
-Run twice and compare checksums of the normalized command/status/inventory files; assert equality. Before and after, compare upstream `HEAD`, origin URLs, `git status --porcelain=v1`, `git diff --cached --quiet`, `git ls-files --others --exclude-standard`, and the content/presence of allowed ignored `version.inc` and `StringDefs.cpp`. Assert no `.o`, `.a`, `.dylib`, `compile_commands.json`, `Dependencies`, or `Dist` path exists and no `cmake --build`/`ninja`/compiler invocation was logged.
+Run twice and compare checksums of the raw command/log/status/identity files; assert they remain byte-identical. Compare the regenerated normalized wrapped command/status/inventory files across runs as well. Before and after, compare upstream `HEAD`, origin URLs, `git status --porcelain=v1`, `git diff --cached --quiet`, `git ls-files --others --exclude-standard`, and the content/presence of allowed ignored `version.inc` and `StringDefs.cpp`. Assert no `.o`, `.a`, `.dylib`, `compile_commands.json`, `Dependencies`, or `Dist` path exists and no `cmake --build`/`ninja`/compiler invocation was logged.
 
 Add failing cases for wrong upstream commit, wrong/multiple origins, tracked/staged/untracked/unknown ignored changes, symlinked `Source` or checkout, unresolved `Build`, and a nonzero wrapped configure. Each failure must name the log and corrective action and preserve source/build state outside the validated Gate 2 directories.
 
@@ -460,7 +462,7 @@ In `validate_configure_source`, reuse Phase 1 parsing/classification by sourcing
 
 `run_logged_command` must write stdout/stderr to a sibling temporary log, capture the real exit code with `set +e`, atomically replace log/status, and return that code. `write_command_record` must render each argument as a single-quoted diagnostic token after rejecting newline and single-quote characters.
 
-`run_raw_configure` removes only validated `Build/gate2/raw/build`, records the unmodified command, and invokes CMake with `-S "$ROOT/Source/airdcpp-core"`, `-B "$ROOT/Build/gate2/raw/build"`, Ninja, toolchain/policy flags, and runtime dependency prefix paths. A raw failure is expected evidence and does not abort; a raw success is recorded without weakening the later wrapper gate.
+On its first run, `run_raw_configure` removes only validated `Build/gate2/raw/build`, records the upstream HEAD/CMake hash and unmodified-source command, and invokes CMake with `-S "$ROOT/Source/airdcpp-core"`, `-B "$ROOT/Build/gate2/raw/build"`, Ninja, direct xcrun-resolved compiler paths, Release/static/ARM64/macOS-13/C++20 flags, and runtime dependency prefix paths. It deliberately does not use the parent wrapper/toolchain and does not pass `ENABLE_NATPMP` or `ENABLE_TBB`, preserving upstream's default-`ON` optional-feature behavior for observation. A raw failure is expected evidence and does not abort; a raw success is recorded without weakening the later wrapper gate. Subsequent runs validate the stored input identity and reuse the first command/log/status without invoking raw CMake again.
 
 `run_wrapped_configure` removes only validated `Build/airdcpp-core`, records package discovery using one `cmake --debug-find-pkg=BZip2,ZLIB,OpenSSL,miniupnpc,leveldb,maxminddb,Boost,Snappy,Threads,Iconv` invocation, and requires success. `write_package_resolution` parses only absolute resolved config/library/include paths from that log, requires one logical row for every required package, replaces the validated Brew prefix with `<HOMEBREW_PREFIX>`, and writes sorted `package<TAB>version<TAB>normalized-path` rows; it fails on missing, duplicate, unresolved, project-external non-system, or user-home paths. Map package names to formula-version rows explicitly: `BZip2=bzip2`, `ZLIB=zlib`, `OpenSSL=openssl@3`, `miniupnpc=miniupnpc`, `leveldb=leveldb`, `maxminddb=libmaxminddb`, `Boost=boost`, `Snappy=snappy`, and `Iconv=libiconv`; record `Threads` as version `system` at path `Apple-SDK`. `run_configure_discovery` validates/snapshots source, writes inventories, runs raw then wrapped configure, writes package resolution, calls `assert_configure_scope`, and revalidates every source snapshot.
 
@@ -594,7 +596,7 @@ After consent, validate the parent root, ignored `Source/airdcpp-core` and `Buil
 
 The first live run is also the first real-CMake validation of the wrapper, toolchain, and imported targets. It must verify that `CMAKE_C_COMPILER_ID` and `CMAKE_CXX_COMPILER_ID` are `AppleClang`, target `airdcpp` exists, all imported targets required by the pinned upstream resolve, and the selected Ninja generator completes generation without invoking a build.
 
-Assert raw evidence exists regardless of raw success/failure, wrapped status is `0`, generator is Ninja, all nine policy flags have exact values, compiler IDs are AppleClang, resolved architecture is arm64, and every required package appears once in `package-resolution.tsv` with version and normalized resolved path. Assert optional `libnatpmp`/`tbb` are recorded as disabled regardless of host installation.
+Assert raw evidence exists regardless of raw success/failure, its command omits wrapper/toolchain and optional-feature overrides, and its command/log/status/identity checksums survive the second run unchanged. Require wrapped status `0`, generator Ninja, all nine wrapped policy flags at their exact values, compiler IDs AppleClang, resolved architecture arm64, and every required package once in `package-resolution.tsv` with version and normalized resolved path. Assert optional `libnatpmp`/`tbb` availability is inventoried, the raw attempt retains upstream default-`ON` behavior wherever configuration reaches those probes, and the accepted wrapper result records both disabled regardless of host installation.
 
 Finally assert upstream snapshots are unchanged; no `.o`, `.a`, `.dylib`, compiler command, Ninja build command, `Dependencies`, or `Dist` exists. Print:
 
@@ -633,13 +635,13 @@ snappy
 zlib
 ```
 
-If the set differs, record the current sorted set; do not add packages outside the configured allowlist. Before the mutating command, request explicit user approval to run:
+If the set differs, record the current sorted set; do not add packages outside the configured allowlist. The Phase 2 request already authorizes installation of missing required formulae during execution, so run:
 
 ```bash
 rtk ./scripts/build --configure-only --install-missing
 ```
 
-This command may install only the reported missing required formulae. A refusal or Homebrew failure stops Gate 2 without weakening checks.
+This command may install only the reported missing required formulae. If the execution environment requires a sandbox escalation, request that command-scoped approval; a refusal or Homebrew failure stops Gate 2 without weakening checks.
 
 - [ ] **Step 4: Run and preserve the unmodified upstream configure attempt**
 
@@ -693,7 +695,7 @@ Implement `write_gate2_report ROOT OUTPUT` in `scripts/lib/native-discovery.sh`.
 - upstream cleanliness and no-compile/no-`Dist` assertions;
 - unresolved Phase 3 questions.
 
-The report generator must fail if any input contains an unresolved absolute project, home, or Homebrew path, a missing version/resolution, a placeholder marker, or a nonzero wrapped status. Re-running it with identical evidence must produce byte-identical output.
+The report generator must fail if any input contains an unresolved absolute project, home, or Homebrew path, a missing version/resolution, an unresolved marker, or a nonzero wrapped status. Re-running it with identical evidence must produce byte-identical output.
 
 - [ ] **Step 7: Run live Gate 2 twice and verify GREEN**
 
