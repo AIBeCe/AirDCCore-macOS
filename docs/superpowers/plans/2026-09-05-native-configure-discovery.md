@@ -1,111 +1,83 @@
-# Native Configure Discovery Implementation Plan
+# Native Dependency and Configure Discovery Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Produce a deterministic, configure-only native macOS ARM64 discovery workflow and a reviewed Gate 2 report without compiling AirDC++ Core.
+**Goal:** Produce a reviewed, deterministic, configure-only ARM64 Release path for the pinned AirDC++ Core source, with explicit Homebrew discovery evidence and no core compilation.
 
-**Architecture:** Extend the stable `scripts/build` entry point with an explicit `--configure-only` mode backed by a focused POSIX shell library. The workflow records host and Homebrew discovery, preserves the first unmodified upstream configure attempt, then configures through a tracked top-level CMake wrapper and ARM64 toolchain into ignored `Build/airdcpp-core`; hermetic tests replace Homebrew, CMake, and Xcode tools with fixtures, while an opt-in live test produces normalized Gate 2 evidence.
+**Architecture:** Extend the stable `scripts/build` entry point with a single Phase 2 mode, `--configure-only`, and keep host validation, formula discovery, evidence capture, and CMake invocation in a focused shell library. A tracked top-level CMake wrapper supplies project policy and missing check-module context to the unmodified pinned source, while narrowly scoped `Find` modules bridge only package/config mismatches proven by preserved configure logs. Generated logs and build trees stay below ignored `Build/airdcpp-core`; a normalized reviewed Gate 2 report is tracked under `docs/reports`.
 
-**Tech Stack:** POSIX `/bin/sh`, CMake, Ninja, Git, Apple `xcrun`/Apple Clang/libc++, Homebrew discovery, pkg-config, and shell integration tests with no third-party test framework.
+**Tech Stack:** POSIX shell, CMake, Ninja, Apple Clang/libc++, Git, Python 3, Homebrew discovery packages, shell fixture tests
 
 **Spec:** `docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md`
 
 ## Global Constraints
 
-- Implement Phase 2, **Native dependency and configure discovery**, and no later phase.
-- Upstream is the ignored, non-submodule checkout `Source/airdcpp-core` from `https://github.com/airdcpp/airdcpp-core.git` at exact commit `55d51ceb817ec006d4ec844d9e3788e1b0ccc352`.
-- `Source` is reserved for AirDC++ Core. Do not add third-party sources; future third-party source reconstruction belongs under ignored top-level `Dependencies`.
-- Configure out of tree at `Build/airdcpp-core`; raw evidence belongs at `Build/gate2/raw`; package-resolution and host logs belong under `Build/gate2`.
-- Configure `Release`, `BUILD_SHARED_LIBS=OFF`, `CMAKE_OSX_ARCHITECTURES=arm64`, Apple Clang/libc++ defaults, `CMAKE_CXX_STANDARD=20`, and explicit `ENABLE_NATPMP=OFF` and `ENABLE_TBB=OFF` for the deterministic Gate 2 baseline.
-- Use `13.0` as the provisional broad-compatibility Gate 2 deployment target. Record it as a Phase 3 compile-validation candidate, not a final release minimum; do not add legacy compatibility patches merely to lower it.
-- Homebrew is discovery-only and is not a publication contract. Tracked files must contain logical formula names and normalized `<HOMEBREW_PREFIX>` paths, never a machine-local prefix such as `/opt/homebrew`.
-- Required host formulae for this phase are `cmake`, `ninja`, `pkgconf`, and `python@3.14`. Required dependency formulae are `boost`, `bzip2`, `zlib`, `openssl@3`, `miniupnpc`, `leveldb`, `libmaxminddb`, `snappy`, and `libiconv`.
-- `Threads` is supplied by the native Apple platform. Do not install or add `WebSocket++`, `nlohmann-json`, npm, Boost `system`, `libnatpmp`, or TBB without new configure evidence and explicit review.
-- `libnatpmp` and `tbb` remain recorded optional observations. They are not installation prerequisites because the Gate 2 baseline disables both features explicitly.
-- Later execution may install only missing required formulae, only after explicit `--install-missing` consent. Ordinary configure-only execution must never install, upgrade, unlink, or remove packages.
-- Preserve the unmodified pinned upstream configure command, stdout/stderr, exit status, upstream HEAD, and cleanliness before applying wrapper adaptations. Re-inspect `Source/airdcpp-core/CMakeLists.txt` immediately before proposing any patch.
-- Prefer wrapper/module fixes. Add no upstream patch unless an unmodified failure proves it necessary and the wrapper cannot correct it; a patch requires its own failing test, evidence, deterministic application, and review.
-- Gate 2 ends at successful CMake generation. Do not invoke `cmake --build`, Ninja, a compiler on core sources, archive creation, symbol/link closure, `Dist`, packaging, source-built dependencies, release work, Objective-C++, Swift/SPM, AppKit, or applications.
-- Both hermetic and live reruns must be idempotent. Upstream HEAD, origin, tracked/staged/untracked state, and the two allowed ignored generated paths must remain unchanged by configure-only work.
-- All failures are nonzero and actionable, naming the failed phase, relevant log, and corrective command. Do not capture secrets or broad environment dumps.
-- Parent work stays on `feature/native-configure-discovery`, created from `develop`; execution does not create `master` or merge directly.
+- Host platform: macOS on Apple Silicon.
+- Target architecture: Mach-O `arm64` only.
+- Compiler/runtime: Apple Clang with libc++.
+- Configuration: Release.
+- Upstream source: `https://github.com/airdcpp/airdcpp-core.git` at full commit `55d51ceb817ec006d4ec844d9e3788e1b0ccc352`.
+- Source checkout: ignored `Source/airdcpp-core`, detached at the configured commit, with no Git submodule and no vendored copy.
+- Third-party sources: ignored top-level `Dependencies`; Phase 2 does not populate it or introduce `config/dependencies.lock`.
+- Build workspace: ignored `Build`; all configure trees and raw evidence live under `Build/airdcpp-core`.
+- Published boundary: ignored/generated `Dist`; Phase 2 must neither create nor modify it.
+- Stable user-facing commands remain `update`, `build`, `verify`, and `clean`; this phase adds only `scripts/build --configure-only`.
+- Homebrew is permitted for host tools and first configure discovery only, never as the final publication contract.
+- Required formula inputs for discovery are `cmake`, `ninja`, `boost`, `bzip2`, `zlib`, `openssl@3`, `miniupnpc`, `leveldb`, `libmaxminddb`, `snappy`, `libiconv`, `pkgconf`, and `python@3.14`.
+- Native SDK `Threads` remains a system interface; SDK copies of BZip2, ZLIB, OpenSSL, or Iconv do not silently replace controlled Homebrew discovery inputs.
+- `ENABLE_NATPMP=OFF` and `ENABLE_TBB=OFF` are explicit for the deterministic Phase 2 result; the preserved unmodified attempt records their upstream default-ON probing while `libnatpmp` and `tbb` are absent.
+- Do not add Boost `system`, WebSocket++, nlohmann-json, npm, or any other package not declared by the pinned upstream CMake.
+- Configure policy is `BUILD_SHARED_LIBS=OFF`, `CMAKE_BUILD_TYPE=Release`, `CMAKE_OSX_ARCHITECTURES=arm64`, libc++ defaults, `CMAKE_CXX_STANDARD=20`, `CMAKE_CXX_EXTENSIONS=OFF`, and deployment target `14.0`.
+- Deployment target `14.0` is a Gate 2 discovery choice favoring broad compatibility without legacy-specific source patches; the report must distinguish compiler acceptance from final dependency-binary compatibility, which is not proved until later build and inspection gates.
+- Wrapper adaptation is preferred. An upstream patch is prohibited in this plan; if final configure evidence proves one unavoidable, stop Phase 2, re-inspect the pinned upstream CMake, and request a separately reviewed plan change before adding a patch.
+- Configure only: no `cmake --build`, direct `ninja`, AirDC++ Core object compilation/linking, archive creation, `libairdcpp.a`, packaging, smoke consumer, or release work. CMake's compiler-identification and `Check*` configure probes are permitted and must be distinguished from building the `airdcpp` target.
+- Parent upstream cleanliness may include only `airdcpp/core/version.inc` and `airdcpp/core/localization/StringDefs.cpp`; configure is expected to create neither file and must not change any other upstream path.
+- Parent-repository work follows full GitFlow on `feature/native-configure-discovery` from `origin/develop`; never commit this work directly to `develop` and do not create `master`.
+- When Codex executes this plan, every interactive external command is run through `rtk` as required by `AGENTS.md`; shell and CMake blocks that define tracked file contents remain literal source code.
+
+## Planning Evidence and Locked File Map
+
+The planning host was verified on 2026-09-05 as `arm64`, macOS 26.5.1, Xcode 26.6 build 17F113, Apple Clang 21.0.0, macOS SDK 26.5, Python 3.14.3, Homebrew 6.0.14 at `/opt/homebrew`. Installed discovery formulas were `libiconv 1.18`, `miniupnpc 2.3.3`, `openssl@3 3.6.1`, `pkgconf 2.5.1`, and `python@3.14 3.14.3_1`. Required formulas not present were `cmake`, `ninja`, `boost`, `bzip2`, `zlib`, `leveldb`, `libmaxminddb`, and `snappy`; optional `libnatpmp` and `tbb` were also absent and must not be installed for the OFF/OFF Phase 2 policy.
+
+The pinned upstream has one `CMakeLists.txt`. It invokes `CHECK_FUNCTION_EXISTS` and `CHECK_INCLUDE_FILES` without including their CMake modules, uses parent-style `VERSION`, `TAG_APPLICATION`, `APPLICATION_ID`, `RESOURCE_DIRECTORY`, `GLOBAL_CONFIG_DIRECTORY`, and `PROJECT_NAME_GLOBAL`, and requests `miniupnpc` and `maxminddb` packages whose observed Homebrew discovery boundary requires focused adapters. The already-installed `miniupnpc 2.3.3` contains headers, static/shared libraries, and `miniupnpc.pc`, but no CMake package config. These facts justify the following files without modifying upstream:
+
+| Path | Responsibility |
+| --- | --- |
+| `scripts/build` | Stable user entry point; accepts only `--configure-only` in Phase 2 and never invokes a build. |
+| `scripts/lib/configure.sh` | Host/compiler validation, formula inventory, upstream invariants, path construction, one-time evidence preservation, and configure invocation helpers. |
+| `CMakeLists.txt` | Top-level policy wrapper; validates Apple Clang and fixed configure policy, defines parent-style values, includes check modules, adds the unmodified pinned source. |
+| `cmake/toolchains/macos-arm64.cmake` | Resolves `xcrun` Apple compilers and fixes SDK, `arm64`, deployment target 14.0, and libc++ policy. |
+| `cmake/modules/AirDCCorePolicy.cmake` | Small testable CMake functions for compiler and cache-invariant rejection plus imported-target evidence. |
+| `cmake/modules/Findminiupnpc.cmake` | Bridges the observed pkg-config/header/library Homebrew layout to `miniupnpc::miniupnpc`. |
+| `cmake/modules/Findmaxminddb.cmake` | Bridges pkg-config/header/library discovery to `maxminddb::maxminddb`. |
+| `tests/configure_helpers_test.sh` | Hermetic shell tests for formula checks, inventory normalization, upstream validation, and path construction. |
+| `tests/cmake_wrapper_test.sh` | Local CMake fixture tests for wrapper variables, policy rejection, architecture, standard, options, and no AirDC++ Core target build. |
+| `tests/find_modules_test.sh` | Local fake-prefix tests for both imported-target adapters. |
+| `tests/build_configure_test.sh` | Hermetic fake-tool integration tests for `scripts/build --configure-only`, first-attempt preservation, reruns, failures, and scope. |
+| `tests/fixtures/configure-upstream/CMakeLists.txt` | Minimal nested upstream surrogate that asserts wrapper-supplied commands and parent values without third-party packages. |
+| `tests/gate2_configure_test.sh` | Explicitly enabled real-host Gate 2 test; validates the final cache/evidence and proves no AirDC++ Core target build or scope leakage. |
+| `docs/reports/2026-09-05-gate-2-native-configure.md` | Reviewed, normalized record of exact commands, versions, paths, failures, adaptations, warnings, and final result. |
+| `README.md` | Adds the configure-only operator command and Phase 2 boundary. |
+| `docs/architecture.md` | Records wrapper/helper ownership and configure data flow. |
+| `docs/dependencies.md` | Records observed discovery formula versions/paths and OFF optional-feature policy without promising publication inputs. |
+| `docs/build-and-release.md` | Documents Gate 2 invocation, evidence location, and explicit no-compile boundary. |
 
 ---
 
-## Verified planning observations
-
-The plan was written after read-only verification on 2026-09-05:
-
-- host: `arm64`, Xcode `26.6` (`17F113`), Apple Clang `21.0.0`, Python `3.14.3`, Homebrew prefix `/opt/homebrew`;
-- installed: `libiconv 1.18`, `miniupnpc 2.3.3`, `openssl@3 3.6.1`, `pkgconf 2.5.1`, `python@3.14 3.14.3_1`;
-- not installed: `cmake`, `ninja`, `boost`, `bzip2`, `zlib`, `leveldb`, `libmaxminddb`, `snappy`, `libnatpmp`, `tbb`;
-- pinned upstream native lookups: BZip2, ZLIB, OpenSSL, miniupnpc, leveldb, maxminddb, Boost `regex`/`thread`, static-build Snappy, Threads, and Iconv;
-- pinned upstream gaps to test rather than assume: missing includes for `CheckFunctionExists` and `CheckIncludeFiles`, parent-provided resource/config/version variables, and package/config target-name compatibility;
-- `unofficial-minizip` is inside the upstream `WIN32` branch and is not a native macOS prerequisite.
-
-## Planned file map
-
-| File | Responsibility |
-| --- | --- |
-| `config/native-discovery.env` | Inert, prefix-free Gate 2 policy and exact formula inventory |
-| `scripts/lib/native-discovery.sh` | Strict policy parser, host/formula inventory, safe install calculation, normalized evidence helpers |
-| `scripts/build` | Stable entry point; Phase 2 supports only `--configure-only`, with optional explicit `--install-missing` |
-| `CMakeLists.txt` | Native wrapper that supplies standalone check modules, parent variables, and the upstream subdirectory |
-| `cmake/toolchains/macos-arm64.cmake` | Resolve `xcrun` Apple compilers and enforce ARM64/deployment policy |
-| `cmake/modules/Findmaxminddb.cmake` | Conditional evidence-backed adapter, created only if the live trace proves Homebrew metadata lacks upstream's requested target |
-| `tests/native_discovery_test.sh` | Hermetic policy, host inventory, formula detection, normalization, and install-consent tests |
-| `tests/configure_test.sh` | Hermetic raw/wrapper configure orchestration, idempotence, source-cleanliness, and no-compile tests |
-| `tests/gate2_configure_test.sh` | Opt-in live raw-first plus wrapped configure Gate 2 |
-| `docs/gate2-native-configure-report.md` | Reviewed, normalized host/package/configure evidence |
-| `README.md` | Configure-only user entry point and Phase 2 status |
-| `docs/dependencies.md` | Discovery-only Homebrew inventory and transition boundary |
-| `docs/build-and-release.md` | Gate 2 command, output boundary, and no-compile scope |
-
-## Command contract
-
-Public commands:
-
-```bash
-./scripts/build --configure-only
-./scripts/build --configure-only --install-missing
-AIRDCCORE_RUN_GATE2=1 ./tests/gate2_configure_test.sh
-```
-
-`--configure-only` checks prerequisites and configures without installing or compiling. `--install-missing` is the only package-mutation consent and may pass only the currently missing required allowlisted formulae to one `brew install` invocation. No arguments, unknown arguments, `--install-missing` without `--configure-only`, and every non-configure build mode exit `64` with usage text until Phase 3.
-
-Stable evidence paths:
-
-```text
-Build/gate2/host-tools.tsv
-Build/gate2/homebrew-formulae.tsv
-Build/gate2/raw/configure.command
-Build/gate2/raw/configure.log
-Build/gate2/raw/configure.status
-Build/gate2/raw/upstream-head
-Build/gate2/raw/upstream-cmake.sha256
-Build/gate2/package-resolution.tsv
-Build/gate2/wrapped-configure.log
-Build/gate2/wrapped-configure.status
-Build/airdcpp-core/
-```
-
-Each TSV is sorted by its first field and uses tabs. Status files contain one decimal exit code plus a newline. `configure.command` is a shell-escaped diagnostic record, not an executable script. The first raw command/log/status and its upstream HEAD/CMake hash are immutable for the pinned input: reruns verify and reuse them byte-for-byte. Other evidence is replaced atomically through sibling `.tmp.$$` files and never appends stale output. If the stored raw identity differs from the current pin or upstream CMake hash, fail with an instruction to preserve/move `Build/gate2/raw` for review rather than overwrite it.
-
-### Task 1: Add strict native-discovery policy and normalized host inventory
+### Task 1: Configure Discovery Shell Contracts and Prerequisite Gate
 
 **Files:**
-- Create: `config/native-discovery.env`
-- Create: `scripts/lib/native-discovery.sh`
-- Create: `tests/native_discovery_test.sh`
+- Create: `scripts/lib/configure.sh`
+- Create: `tests/configure_helpers_test.sh`
 - Modify: `tests/test_helper.sh`
 
 **Interfaces:**
-- Consumes: Phase 1 `PROJECT_ROOT` convention and `tests/test_helper.sh` assertions.
-- Produces: `load_native_discovery_config PATH`; `validate_native_host`; `write_host_inventory OUTPUT`; `normalize_evidence INPUT OUTPUT`; exported `DISCOVERY_*` policy values.
+- Consumes: `load_upstream_config(path)` and `checkout_changes(checkout)` from `scripts/lib/upstream.sh`; `config/upstream.env`; executable tools supplied through `PATH`.
+- Produces: `required_formulae() -> newline-delimited names`, `missing_required_formulae() -> newline-delimited names`, `assert_supported_host()`, `validate_configure_checkout(project_root, checkout, expected_commit)`, `dependency_cmake_prefix_path() -> semicolon-delimited prefixes`, `dependency_pkg_config_path() -> colon-delimited directories`, `write_host_inventory(output_path)`, and `configure_die(message) -> exit 1`.
 
-- [ ] **Step 1: Extend hermetic test helpers with executable fixtures**
+- [ ] **Step 1: Extend the test helper with exact line and directory assertions**
 
-Add these helpers to `tests/test_helper.sh`:
+Add these functions to `tests/test_helper.sh`:
 
 ```sh
 assert_not_contains() {
@@ -114,653 +86,976 @@ assert_not_contains() {
   label=$3
   case "$haystack" in
     *"$needle"*) fail "$label: unexpected output containing [$needle]" ;;
-    *) ;;
   esac
 }
 
-write_executable() {
-  executable_path=$1
-  shift
-  mkdir -p "$(dirname -- "$executable_path")"
-  printf '%s\n' "$@" > "$executable_path"
-  chmod +x "$executable_path"
+assert_dir_absent() { [ ! -d "$1" ] || fail "expected absent directory: $1"; }
+
+assert_line() {
+  file=$1
+  line=$2
+  label=$3
+  grep -Fqx -- "$line" "$file" || fail "$label: missing exact line [$line] in $file"
 }
 ```
 
-- [ ] **Step 2: Write the failing policy and host-inventory tests**
+- [ ] **Step 2: Write the failing hermetic helper tests**
 
-Create executable `tests/native_discovery_test.sh`. It must create a temporary case root, copy the production policy/library, and prepend fixture executables for `uname`, `xcodebuild`, `xcrun`, `python3`, and `brew`. The fixture outputs are:
-
-```text
-uname -m                              -> arm64
-xcodebuild -version                   -> Xcode 26.6 / Build version 17F113
-xcrun --find clang                    -> /Fixture/Xcode/usr/bin/clang
-xcrun --find clang++                  -> /Fixture/Xcode/usr/bin/clang++
-xcrun clang --version                 -> Apple clang version 21.0.0
-python3 --version                     -> Python 3.14.3
-brew --prefix                         -> /Fixture/Homebrew
-brew --version                        -> Homebrew 5.0.0
-brew list --versions FORMULA          -> fixture table or exit 1
-```
-
-Exercise these exact cases:
-
-```sh
-load_native_discovery_config "$CASE_ROOT/config/native-discovery.env"
-assert_eq "$DISCOVERY_BUILD_TYPE" Release "build type"
-assert_eq "$DISCOVERY_ARCHITECTURE" arm64 "architecture"
-assert_eq "$DISCOVERY_CXX_STANDARD" 20 "C++ standard"
-assert_eq "$DISCOVERY_DEPLOYMENT_TARGET" 13.0 "deployment target"
-assert_eq "$DISCOVERY_ENABLE_NATPMP" OFF "NAT-PMP policy"
-assert_eq "$DISCOVERY_ENABLE_TBB" OFF "TBB policy"
-validate_native_host
-write_host_inventory "$CASE_ROOT/Build/gate2/host-tools.tsv"
-assert_contains "$(cat "$CASE_ROOT/Build/gate2/host-tools.tsv")" 'architecture\tarm64' "host architecture"
-assert_contains "$(cat "$CASE_ROOT/Build/gate2/host-tools.tsv")" 'compiler_id\tAppleClang' "compiler identity"
-```
-
-Also assert that duplicate/unknown/missing keys, whitespace-bearing values, non-ARM64 hosts, a non-Apple compiler, missing `xcrun`, and a config containing `HOMEBREW_PREFIX=/opt/homebrew` fail without creating `Build`. Feed a fixture log containing the case root, `/Users/example`, and `/Fixture/Homebrew`; assert `normalize_evidence` replaces the case root and Homebrew prefix with `<PROJECT_ROOT>` and `<HOMEBREW_PREFIX>` and rejects the unrelated home path rather than tracking it.
-
-- [ ] **Step 3: Run the focused test to verify RED**
-
-Run: `rtk ./tests/native_discovery_test.sh`
-
-Expected: FAIL because `config/native-discovery.env` and `scripts/lib/native-discovery.sh` do not exist.
-
-- [ ] **Step 4: Add the inert discovery policy**
-
-Create `config/native-discovery.env` with exactly:
-
-```text
-DISCOVERY_BUILD_TYPE=Release
-DISCOVERY_ARCHITECTURE=arm64
-DISCOVERY_CXX_STANDARD=20
-DISCOVERY_DEPLOYMENT_TARGET=13.0
-DISCOVERY_ENABLE_NATPMP=OFF
-DISCOVERY_ENABLE_TBB=OFF
-DISCOVERY_HOST_FORMULAE=cmake,ninja,pkgconf,python@3.14
-DISCOVERY_DEPENDENCY_FORMULAE=boost,bzip2,zlib,openssl@3,miniupnpc,leveldb,libmaxminddb,snappy,libiconv
-DISCOVERY_OPTIONAL_FORMULAE=libnatpmp,tbb
-```
-
-The parser must allow only these nine keys, reject duplicates, require every key once, validate fixed enumerations and comma-separated formula tokens with `^[A-Za-z0-9@+._-][A-Za-z0-9@+._,-]*$`, and never source or evaluate the file.
-
-- [ ] **Step 5: Implement host validation and evidence normalization**
-
-Create `scripts/lib/native-discovery.sh` with these focused parser and validation mechanics (the inventory writer uses sibling temporary files and `LC_ALL=C sort` before `mv`):
-
-```sh
-discovery_error() { printf 'build: error: %s\n' "$*" >&2; }
-discovery_die() { discovery_error "$*"; exit 1; }
-
-validate_formula_csv() {
-  [ -n "$1" ] && printf '%s\n' "$1" |
-    grep -Eq '^[A-Za-z0-9@+._-]+(,[A-Za-z0-9@+._-]+)*$'
-}
-
-load_native_discovery_config() {
-  discovery_config=$1
-  [ -f "$discovery_config" ] || { discovery_error "missing file: $discovery_config"; return 1; }
-  seen_keys=
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue ;; *=*) key=${line%%=*}; value=${line#*=} ;;
-      *) discovery_error "malformed line: $line"; return 1 ;; esac
-    case ",$seen_keys," in *",$key,"*) discovery_error "duplicate key: $key"; return 1 ;; esac
-    case "$key" in
-      DISCOVERY_BUILD_TYPE) DISCOVERY_BUILD_TYPE=$value ;;
-      DISCOVERY_ARCHITECTURE) DISCOVERY_ARCHITECTURE=$value ;;
-      DISCOVERY_CXX_STANDARD) DISCOVERY_CXX_STANDARD=$value ;;
-      DISCOVERY_DEPLOYMENT_TARGET) DISCOVERY_DEPLOYMENT_TARGET=$value ;;
-      DISCOVERY_ENABLE_NATPMP) DISCOVERY_ENABLE_NATPMP=$value ;;
-      DISCOVERY_ENABLE_TBB) DISCOVERY_ENABLE_TBB=$value ;;
-      DISCOVERY_HOST_FORMULAE) DISCOVERY_HOST_FORMULAE=$value ;;
-      DISCOVERY_DEPENDENCY_FORMULAE) DISCOVERY_DEPENDENCY_FORMULAE=$value ;;
-      DISCOVERY_OPTIONAL_FORMULAE) DISCOVERY_OPTIONAL_FORMULAE=$value ;;
-      *) discovery_error "unknown key: $key"; return 1 ;;
-    esac
-    seen_keys=${seen_keys:+$seen_keys,}$key
-  done < "$discovery_config"
-  [ "$seen_keys" = 'DISCOVERY_BUILD_TYPE,DISCOVERY_ARCHITECTURE,DISCOVERY_CXX_STANDARD,DISCOVERY_DEPLOYMENT_TARGET,DISCOVERY_ENABLE_NATPMP,DISCOVERY_ENABLE_TBB,DISCOVERY_HOST_FORMULAE,DISCOVERY_DEPENDENCY_FORMULAE,DISCOVERY_OPTIONAL_FORMULAE' ] || {
-    discovery_error 'missing or out-of-order native discovery keys'; return 1;
-  }
-  [ "$DISCOVERY_BUILD_TYPE" = Release ] && [ "$DISCOVERY_ARCHITECTURE" = arm64 ] &&
-    [ "$DISCOVERY_CXX_STANDARD" = 20 ] && [ "$DISCOVERY_DEPLOYMENT_TARGET" = 13.0 ] &&
-    [ "$DISCOVERY_ENABLE_NATPMP" = OFF ] && [ "$DISCOVERY_ENABLE_TBB" = OFF ] || {
-      discovery_error 'invalid fixed native discovery policy'; return 1;
-    }
-  validate_formula_csv "$DISCOVERY_HOST_FORMULAE" &&
-    validate_formula_csv "$DISCOVERY_DEPENDENCY_FORMULAE" &&
-    validate_formula_csv "$DISCOVERY_OPTIONAL_FORMULAE" || {
-      discovery_error 'invalid formula inventory'; return 1;
-    }
-}
-
-validate_native_host() {
-  DISCOVERY_HOST_ARCH=$(uname -m) || discovery_die 'uname failed'
-  [ "$DISCOVERY_HOST_ARCH" = arm64 ] || discovery_die "host architecture must be arm64"
-  DISCOVERY_XCODE=$(xcodebuild -version) || discovery_die 'xcodebuild failed'
-  DISCOVERY_CC=$(xcrun --find clang) || discovery_die 'xcrun could not resolve clang'
-  DISCOVERY_CXX=$(xcrun --find clang++) || discovery_die 'xcrun could not resolve clang++'
-  DISCOVERY_CLANG=$(xcrun clang --version) || discovery_die 'clang version probe failed'
-  case "$DISCOVERY_CLANG" in 'Apple clang version '*) ;; *) discovery_die 'Apple Clang is required' ;; esac
-  DISCOVERY_PYTHON=$(python3 --version) || discovery_die 'Python 3 probe failed'
-  DISCOVERY_BREW_PREFIX=$(brew --prefix) || discovery_die 'Homebrew prefix probe failed'
-  DISCOVERY_BREW_VERSION=$(brew --version) || discovery_die 'Homebrew version probe failed'
-}
-
-write_host_inventory() {
-  output=$1; mkdir -p "$(dirname -- "$output")"; temporary=$output.tmp.$$
-  {
-    printf 'architecture\t%s\n' "$DISCOVERY_HOST_ARCH"
-    printf 'compiler_id\tAppleClang\ncompiler_version\t%s\n' "${DISCOVERY_CLANG#Apple clang version }"
-    printf 'homebrew_version\t%s\n' "${DISCOVERY_BREW_VERSION#Homebrew }"
-    printf 'python_version\t%s\n' "${DISCOVERY_PYTHON#Python }"
-    printf 'xcode\t%s\n' "$(printf '%s\n' "$DISCOVERY_XCODE" | tr '\n' ' ')"
-  } | LC_ALL=C sort > "$temporary" && mv "$temporary" "$output"
-}
-
-sed_pattern() {
-  printf '%s\n' "$1" | sed 's/[][\\.*^$|&]/\\&/g'
-}
-
-normalize_evidence() {
-  input=$1; output=$2; temporary=$output.tmp.$$
-  project_pattern=$(sed_pattern "$PROJECT_ROOT")
-  brew_pattern=$(sed_pattern "$DISCOVERY_BREW_PREFIX")
-  sed "s|$project_pattern|<PROJECT_ROOT>|g; s|$brew_pattern|<HOMEBREW_PREFIX>|g" \
-    "$input" > "$temporary"
-  if grep -Eq '/Users/|/home/' "$temporary"; then rm -f "$temporary"; discovery_die 'unnormalized home path in evidence'; fi
-  mv "$temporary" "$output"
-}
-```
-
-The `sed_pattern` helper escapes regex and delimiter metacharacters in both replacement inputs; the test fixture must include those characters in its case root. `write_host_inventory` writes sorted logical fields and versions without absolute compiler or Homebrew paths. `normalize_evidence` must additionally fail if the output still contains the exact project root or Brew prefix after substitution.
-
-- [ ] **Step 6: Verify GREEN and commit**
-
-Run:
-
-```bash
-rtk ./tests/upstream_config_test.sh
-rtk ./tests/update_test.sh
-rtk ./tests/native_discovery_test.sh
-rtk /bin/sh -n scripts/lib/native-discovery.sh tests/native_discovery_test.sh tests/test_helper.sh
-rtk git diff --check
-```
-
-Expected: all three suites print `PASS:` and syntax/diff checks exit `0`.
-
-Commit:
-
-```bash
-rtk git add config/native-discovery.env scripts/lib/native-discovery.sh tests/native_discovery_test.sh tests/test_helper.sh
-rtk git commit -m "feat: record native discovery policy"
-```
-
-### Task 2: Detect and install only missing allowlisted Homebrew prerequisites
-
-**Files:**
-- Modify: `scripts/lib/native-discovery.sh`
-- Create: `scripts/build`
-- Modify: `tests/native_discovery_test.sh`
-
-**Interfaces:**
-- Consumes: parsed `DISCOVERY_HOST_FORMULAE`, `DISCOVERY_DEPENDENCY_FORMULAE`, and `DISCOVERY_OPTIONAL_FORMULAE`.
-- Produces: `formulae_to_lines CSV`; `formula_version FORMULA`; `write_formula_inventory OUTPUT`; `missing_required_formulae`; `install_missing_formulae`; public `scripts/build --configure-only [--install-missing]`.
-
-- [ ] **Step 1: Add failing formula inventory and consent tests**
-
-Extend the fake `brew` fixture to log every invocation and return installed versions for `libiconv`, `miniupnpc`, `openssl@3`, `pkgconf`, and `python@3.14`, while returning `1` for the other required/optional names. Add assertions that:
-
-```sh
-missing=$(missing_required_formulae)
-assert_eq "$missing" "boost
-bzip2
-cmake
-leveldb
-libmaxminddb
-ninja
-snappy
-zlib" "sorted missing required formulae"
-write_formula_inventory "$CASE_ROOT/Build/gate2/homebrew-formulae.tsv"
-assert_contains "$(cat "$CASE_ROOT/Build/gate2/homebrew-formulae.tsv")" 'libnatpmp\toptional\tmissing' "optional observation"
-assert_contains "$(cat "$CASE_ROOT/Build/gate2/homebrew-formulae.tsv")" 'miniupnpc\trequired\t2.3.3' "installed dependency"
-```
-
-Invoke `scripts/build --configure-only` and assert it fails with the exact missing list and corrective command, without any `brew install`. Invoke `scripts/build --install-missing` and unknown modes and assert exit `64`. Invoke `scripts/build --configure-only --install-missing`; assert exactly one logged mutation:
-
-```text
-install boost bzip2 cmake leveldb libmaxminddb ninja snappy zlib
-```
-
-Then make the fixture report all required formulae installed and assert the same command performs no install.
-
-- [ ] **Step 2: Run the focused test to verify RED**
-
-Run: `rtk ./tests/native_discovery_test.sh`
-
-Expected: FAIL because formula inventory functions and `scripts/build` do not exist.
-
-- [ ] **Step 3: Implement deterministic formula classification**
-
-Add the five produced functions to `scripts/lib/native-discovery.sh`. Required output is the sorted union of host and dependency formulae; optional formulae appear in inventory but never in `missing_required_formulae`. Query only `brew list --versions "$formula"`; do not use `brew update`, `brew upgrade`, remote JSON APIs, or dependency expansion. Record the entire returned version string after validating it contains only formula/version tokens.
-
-`install_missing_formulae` must materialize the sorted missing set, return without calling Brew when empty, and otherwise invoke exactly:
-
-```sh
-brew install $missing_words
-```
-
-Because field splitting is intentional here, validate every formula token before building `missing_words`; no value comes from arbitrary environment input.
-
-- [ ] **Step 4: Add the Phase 2 build entry point**
-
-Create executable `scripts/build` with this option state machine:
+Create `tests/configure_helpers_test.sh`. Its fake `uname`, `sw_vers`, `xcodebuild`, `xcrun`, `brew`, `cmake`, `ninja`, and `python3` commands must return fixed values. Cover these exact cases:
 
 ```sh
 #!/bin/sh
 set -eu
 
-PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
-. "$PROJECT_ROOT/scripts/lib/native-discovery.sh"
-configure_only=0
-install_missing=0
-for argument in "$@"; do
-  case "$argument" in
-    --configure-only) [ "$configure_only" -eq 0 ] || exit 64; configure_only=1 ;;
-    --install-missing) [ "$install_missing" -eq 0 ] || exit 64; install_missing=1 ;;
-    *) printf 'usage: %s --configure-only [--install-missing]\n' "$0" >&2; exit 64 ;;
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+. "$ROOT/tests/test_helper.sh"
+. "$ROOT/scripts/lib/upstream.sh"
+. "$ROOT/scripts/lib/configure.sh"
+
+WORK=$(new_temp_dir)
+trap 'rm -rf -- "$WORK"' 0 1 2 15
+FAKE_BIN=$WORK/bin
+mkdir -p "$FAKE_BIN" "$WORK/project/Source/airdcpp-core/.git"
+
+write_fake() {
+  tool=$1
+  shift
+  printf '%s\n' '#!/bin/sh' "$@" > "$FAKE_BIN/$tool"
+  chmod +x "$FAKE_BIN/$tool"
+}
+
+write_fake uname \
+  'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) exit 64 ;; esac'
+write_fake sw_vers \
+  'printf "ProductName:\tmacOS\nProductVersion:\t26.5.1\nBuildVersion:\t25F80\n"'
+write_fake xcodebuild \
+  'printf "Xcode 26.6\nBuild version 17F113\n"'
+write_fake xcrun \
+  'case "$*" in' \
+  '  "clang --version") echo "Apple clang version 21.0.0 (clang-2100.1.1.101)" ;;' \
+  '  "--find clang") echo /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang ;;' \
+  '  "--find clang++") echo /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ ;;' \
+  '  "--sdk macosx --show-sdk-path") echo /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk ;;' \
+  '  "--sdk macosx --show-sdk-version") echo 26.5 ;;' \
+  '  *) exit 64 ;;' \
+  'esac'
+write_fake cmake 'echo "cmake version 3.31.6"'
+write_fake ninja 'echo 1.12.1'
+write_fake python3 'echo "Python 3.14.3"'
+write_fake brew \
+  'case "$1:$2" in' \
+  '  --prefix:) echo /opt/homebrew ;;' \
+  '  --prefix:*) echo "/opt/homebrew/opt/$2" ;;' \
+  '  --version:) echo "Homebrew 6.0.14" ;;' \
+  '  list:--versions)' \
+  '    case "$3" in cmake|snappy) exit 1 ;; miniupnpc) echo "miniupnpc 2.3.3" ;; *) echo "$3 1.0.0" ;; esac ;;' \
+  '  *) exit 64 ;;' \
+  'esac'
+
+missing=$(PATH="$FAKE_BIN:$PATH" missing_required_formulae)
+assert_eq "$missing" "cmake
+snappy" "missing formula order"
+
+prefixes=$(PATH="$FAKE_BIN:$PATH" dependency_cmake_prefix_path)
+assert_contains "$prefixes" "/opt/homebrew/opt/boost" "Boost prefix"
+assert_contains "$prefixes" "/opt/homebrew/opt/libiconv" "Iconv prefix"
+assert_not_contains "$prefixes" "libnatpmp" "NAT-PMP is not required"
+assert_not_contains "$prefixes" "tbb" "TBB is not required"
+
+PROJECT_ROOT=$WORK/project PATH="$FAKE_BIN:$PATH" \
+  write_host_inventory "$WORK/project/Build/airdcpp-core/inventory.txt"
+cp "$WORK/project/Build/airdcpp-core/inventory.txt" "$WORK/inventory.txt"
+assert_line "$WORK/inventory.txt" "host.arch=arm64" "host architecture"
+assert_line "$WORK/inventory.txt" "cmake.version=3.31.6" "CMake version"
+assert_line "$WORK/inventory.txt" "formula.miniupnpc=2.3.3" "formula version"
+assert_not_contains "$(cat "$WORK/inventory.txt")" "$WORK" "inventory temp-path leakage"
+
+printf 'PASS: configure discovery helpers\n'
+```
+
+Run `chmod +x tests/configure_helpers_test.sh` after creating the file.
+
+Also cover non-`arm64` host rejection, non-Darwin rejection, non-Apple `xcrun clang --version` rejection, missing formula diagnostics, a wrong upstream commit, staged/tracked/untracked upstream changes, allowed generated paths, a symlinked checkout, and output refusal outside `Build/airdcpp-core`.
+
+- [ ] **Step 3: Run the helper test to verify it fails**
+
+Run: `./tests/configure_helpers_test.sh`
+
+Expected: FAIL while sourcing missing `scripts/lib/configure.sh`.
+
+- [ ] **Step 4: Implement the minimal shell helper contract**
+
+Create `scripts/lib/configure.sh` with strict, data-only discovery. Use this formula set and keep optional packages out of it:
+
+```sh
+#!/bin/sh
+
+configure_die() {
+  printf 'build: error: configure discovery: %s\n' "$*" >&2
+  exit 1
+}
+
+required_formulae() {
+  printf '%s\n' cmake ninja boost bzip2 zlib openssl@3 miniupnpc \
+    leveldb libmaxminddb snappy libiconv pkgconf python@3.14
+}
+
+missing_required_formulae() {
+  required_formulae | while IFS= read -r formula; do
+    HOMEBREW_NO_AUTO_UPDATE=1 brew list --versions "$formula" >/dev/null 2>&1 ||
+      printf '%s\n' "$formula"
+  done
+}
+
+assert_supported_host() {
+  [ "$(uname -s)" = Darwin ] || configure_die "macOS is required"
+  [ "$(uname -m)" = arm64 ] || configure_die "arm64 host is required"
+  clang_version=$(xcrun clang --version 2>/dev/null) || configure_die "xcrun Apple Clang is unavailable"
+  case "$clang_version" in
+    Apple\ clang\ version*) ;;
+    *) configure_die "xcrun did not resolve Apple Clang" ;;
   esac
-done
-[ "$configure_only" -eq 1 ] || { printf 'usage: %s --configure-only [--install-missing]\n' "$0" >&2; exit 64; }
-
-load_native_discovery_config "$PROJECT_ROOT/config/native-discovery.env" || exit 1
-validate_native_host
-if [ "$install_missing" -eq 1 ]; then install_missing_formulae; fi
-missing=$(missing_required_formulae)
-[ -z "$missing" ] || discovery_die "missing required Homebrew formulae:\n$missing\nrerun with --configure-only --install-missing after approving installation"
-write_host_inventory "$PROJECT_ROOT/Build/gate2/host-tools.tsv"
-write_formula_inventory "$PROJECT_ROOT/Build/gate2/homebrew-formulae.tsv"
-run_configure_discovery "$PROJECT_ROOT"
+}
 ```
 
-`run_configure_discovery` is deliberately undefined until Task 3 so the test remains focused on prerequisite behavior.
+Implement `validate_configure_checkout` by rejecting symlinks, requiring `.git`, exact detached `HEAD`, configured origin, and `checkout_changes` output empty. For Phase 2, even the two known generated files are only tolerated if they already exist; record them in inventory and prove their contents and mtimes do not change across configure.
 
-- [ ] **Step 5: Verify GREEN and commit**
+Implement path functions from `brew --prefix <formula>`, preserving `required_formulae` order and de-duplicating identical paths. `write_host_inventory` writes sorted `key=value` lines for OS, architecture, Xcode/build, Apple Clang, SDK path/version, Git, Python, Homebrew, CMake, Ninja, each required formula version, each formula prefix, and `optional.libnatpmp=absent|<version>` / `optional.tbb=absent|<version>`. It refuses paths outside `$PROJECT_ROOT/Build/airdcpp-core` and records no environment dump, timestamp, username, home directory, or secret-bearing values.
 
-Run the three offline suites and shell syntax. The native-discovery fixture must stop immediately before the undefined configure runner after proving prerequisite behavior; use a test-only sourced function `run_configure_discovery() { return 0; }`, not production branching.
+- [ ] **Step 5: Run the helper tests to verify they pass**
 
-Commit:
+Run: `./tests/configure_helpers_test.sh`
+
+Expected: `PASS: configure discovery helpers`.
+
+- [ ] **Step 6: Re-run the existing Phase 1 offline tests**
+
+Run: `./tests/upstream_config_test.sh && ./tests/update_test.sh`
+
+Expected: both scripts print `PASS` and the parent status remains clean except for Task 1 files.
+
+- [ ] **Step 7: Commit the shell contract**
 
 ```bash
-rtk git add scripts/build scripts/lib/native-discovery.sh tests/native_discovery_test.sh
-rtk git commit -m "feat: gate configure prerequisites"
+git add scripts/lib/configure.sh tests/configure_helpers_test.sh tests/test_helper.sh
+git commit -m "test: define configure discovery prerequisites"
 ```
 
-### Task 3: Preserve raw upstream configure evidence and orchestrate configure-only runs
+---
 
-**Files:**
-- Modify: `scripts/lib/native-discovery.sh`
-- Modify: `scripts/build`
-- Create: `tests/configure_test.sh`
-
-**Interfaces:**
-- Consumes: Phase 1 `load_upstream_config`, `checkout_changes`, exact checkout identity, parsed native-discovery policy, and required formula inventory.
-- Produces: `validate_configure_source ROOT`; `brew_prefix_paths`; `write_command_record FILE ARGS...`; `run_logged_command LOG STATUS COMMAND...`; `write_package_resolution ROOT OUTPUT`; `run_raw_configure ROOT`; `run_wrapped_configure ROOT`; `assert_configure_scope ROOT`; `run_configure_discovery ROOT`.
-
-- [ ] **Step 1: Create a hermetic configure fixture**
-
-Create executable `tests/configure_test.sh`. Build a case project containing the production scripts/config, a minimal parent Git repository, and an ignored `Source/airdcpp-core` Git fixture at the configured commit. Its fixture `CMakeLists.txt` must fail raw configuration with:
-
-```cmake
-cmake_minimum_required(VERSION 3.16)
-project(Fixture LANGUAGES C CXX)
-CHECK_FUNCTION_EXISTS(posix_fadvise HAVE_POSIX_FADVISE)
-```
-
-Provide fake `cmake`, `brew`, `xcrun`, `uname`, `xcodebuild`, and `python3`. Fake CMake must record every argument and:
-
-- fail the source path `Source/airdcpp-core` with `Unknown CMake command CHECK_FUNCTION_EXISTS`;
-- succeed only for the parent wrapper source;
-- create `CMakeCache.txt` and `build.ninja` in the `-B` directory;
-- fail the test immediately if invoked with `--build`;
-- write a deterministic package trace containing fixture Homebrew paths.
-
-- [ ] **Step 2: Write failing orchestration and safety assertions**
-
-Assert a run creates all stable evidence paths, preserves raw status `1` and its failure text, then successfully creates `Build/airdcpp-core/CMakeCache.txt`. Assert the wrapped invocation contains exactly:
-
-```text
--G Ninja
--DCMAKE_BUILD_TYPE=Release
--DBUILD_SHARED_LIBS=OFF
--DCMAKE_OSX_ARCHITECTURES=arm64
--DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
--DCMAKE_CXX_STANDARD=20
--DCMAKE_CXX_STANDARD_REQUIRED=ON
--DCMAKE_CXX_EXTENSIONS=OFF
--DENABLE_NATPMP=OFF
--DENABLE_TBB=OFF
--DCMAKE_TOOLCHAIN_FILE=<PROJECT_ROOT>/cmake/toolchains/macos-arm64.cmake
-```
-
-Run twice and compare checksums of the raw command/log/status/identity files; assert they remain byte-identical. Compare the regenerated normalized wrapped command/status/inventory files across runs as well. Before and after, compare upstream `HEAD`, origin URLs, `git status --porcelain=v1`, `git diff --cached --quiet`, `git ls-files --others --exclude-standard`, and the content/presence of allowed ignored `version.inc` and `StringDefs.cpp`. Assert no `.o`, `.a`, `.dylib`, `compile_commands.json`, `Dependencies`, or `Dist` path exists and no `cmake --build`/`ninja`/compiler invocation was logged.
-
-Add failing cases for wrong upstream commit, wrong/multiple origins, tracked/staged/untracked/unknown ignored changes, symlinked `Source` or checkout, unresolved `Build`, and a nonzero wrapped configure. Each failure must name the log and corrective action and preserve source/build state outside the validated Gate 2 directories.
-
-- [ ] **Step 3: Run the focused test to verify RED**
-
-Run: `rtk ./tests/configure_test.sh`
-
-Expected: FAIL because the configure runner functions are absent.
-
-- [ ] **Step 4: Implement safe raw-first configure orchestration**
-
-In `validate_configure_source`, reuse Phase 1 parsing/classification by sourcing `scripts/lib/upstream.sh`; require the exact manifest URL/commit, clean detached HEAD, one canonical origin URL, non-symlink parent/checkout, and no unsafe changes. Snapshot allowed generated paths before configuration and verify them byte-for-byte afterward.
-
-`brew_prefix_paths` queries `brew --prefix FORMULA` only for installed required dependency formulae, validates every absolute path is under the current `brew --prefix`, and prints a semicolon-separated list in formula-name order. It also exports a pkg-config search list from each `lib/pkgconfig` and `share/pkgconfig` directory that exists.
-
-`run_logged_command` must write stdout/stderr to a sibling temporary log, capture the real exit code with `set +e`, atomically replace log/status, and return that code. `write_command_record` must render each argument as a single-quoted diagnostic token after rejecting newline and single-quote characters.
-
-On its first run, `run_raw_configure` removes only validated `Build/gate2/raw/build`, records the upstream HEAD/CMake hash and unmodified-source command, and invokes CMake with `-S "$ROOT/Source/airdcpp-core"`, `-B "$ROOT/Build/gate2/raw/build"`, Ninja, direct xcrun-resolved compiler paths, Release/static/ARM64/macOS-13/C++20 flags, and runtime dependency prefix paths. It deliberately does not use the parent wrapper/toolchain and does not pass `ENABLE_NATPMP` or `ENABLE_TBB`, preserving upstream's default-`ON` optional-feature behavior for observation. A raw failure is expected evidence and does not abort; a raw success is recorded without weakening the later wrapper gate. Subsequent runs validate the stored input identity and reuse the first command/log/status without invoking raw CMake again.
-
-`run_wrapped_configure` removes only validated `Build/airdcpp-core`, records package discovery using one `cmake --debug-find-pkg=BZip2,ZLIB,OpenSSL,miniupnpc,leveldb,maxminddb,Boost,Snappy,Threads,Iconv` invocation, and requires success. `write_package_resolution` parses only absolute resolved config/library/include paths from that log, requires one logical row for every required package, replaces the validated Brew prefix with `<HOMEBREW_PREFIX>`, and writes sorted `package<TAB>version<TAB>normalized-path` rows; it fails on missing, duplicate, unresolved, project-external non-system, or user-home paths. Map package names to formula-version rows explicitly: `BZip2=bzip2`, `ZLIB=zlib`, `OpenSSL=openssl@3`, `miniupnpc=miniupnpc`, `leveldb=leveldb`, `maxminddb=libmaxminddb`, `Boost=boost`, `Snappy=snappy`, and `Iconv=libiconv`; record `Threads` as version `system` at path `Apple-SDK`. `run_configure_discovery` validates/snapshots source, writes inventories, runs raw then wrapped configure, writes package resolution, calls `assert_configure_scope`, and revalidates every source snapshot.
-
-- [ ] **Step 5: Verify GREEN and commit**
-
-Run all four offline suites, shell syntax, ignore checks for `Build/`, and diff checks.
-
-Commit:
-
-```bash
-rtk git add scripts/build scripts/lib/native-discovery.sh tests/configure_test.sh
-rtk git commit -m "feat: preserve raw configure discovery"
-```
-
-### Task 4: Add the native ARM64 wrapper and toolchain
+### Task 2: Preserve the Unmodified Attempt and Establish ARM64 Wrapper Policy
 
 **Files:**
 - Create: `CMakeLists.txt`
 - Create: `cmake/toolchains/macos-arm64.cmake`
-- Modify: `tests/configure_test.sh`
+- Create: `cmake/modules/AirDCCorePolicy.cmake`
+- Create: `tests/cmake_wrapper_test.sh`
+- Create: `tests/fixtures/configure-upstream/CMakeLists.txt`
+- Evidence only, ignored: `Build/airdcpp-core/evidence/host-inventory.txt`
+- Evidence only, ignored: `Build/airdcpp-core/unmodified/{command.txt,configure.log,exit-code.txt,inputs.txt}`
+- Evidence only, ignored: `Build/airdcpp-core/wrapper-baseline/{command.txt,configure.log,exit-code.txt}`
 
 **Interfaces:**
-- Consumes: exact policy flags and runtime `CMAKE_PREFIX_PATH`/`PKG_CONFIG_PATH` assembled by Task 3.
-- Produces: wrapper target `airdcpp`; cache contract `AIRDCCORE_GATE2=ON`; wrapper module-search hook; Apple compiler/toolchain validation.
+- Consumes: Task 1 host/formula helpers, Homebrew formula prefixes, `Source/airdcpp-core`, and `/usr/bin/xcrun`.
+- Produces: `cmake/toolchains/macos-arm64.cmake`; CMake functions `airdcpp_require_apple_clang()`, `airdcpp_require_value(name, actual, expected)`, and `airdcpp_record_target(target, output)`; wrapper cache input `AIRDCPP_CORE_SOURCE_DIR:PATH`.
 
-- [ ] **Step 1: Re-inspect the pinned upstream immediately before adaptation**
+- [ ] **Step 1: Run the prerequisite gate and install only the missing required formulas**
 
-Run and save evidence under ignored `Build/gate2/upstream-cmake-inspection.txt`:
+Run the Task 1 helper and compare its output with the verified planning snapshot:
 
 ```bash
-rtk git -C Source/airdcpp-core rev-parse HEAD
-rtk git -C Source/airdcpp-core status --porcelain=v1 --untracked-files=all
-rtk rg -n "CHECK_FUNCTION_EXISTS|CHECK_INCLUDE_FILES|find_package|RESOURCE_DIRECTORY|GLOBAL_CONFIG_DIRECTORY|VERSION|TAG_APPLICATION|APPLICATION_ID" Source/airdcpp-core/CMakeLists.txt
+missing=$(sh -c '. ./scripts/lib/configure.sh; missing_required_formulae')
+printf '%s\n' "$missing"
 ```
 
-Expected: exact pin, no unsafe changes, missing module includes, the verified package lookups, and parent variables. If this evidence differs, stop and revise the plan before adding a patch or adapter.
+Expected on the recorded host:
 
-- [ ] **Step 2: Add failing hermetic wrapper/toolchain assertions**
+```text
+cmake
+ninja
+boost
+bzip2
+zlib
+leveldb
+libmaxminddb
+snappy
+```
 
-Extend `tests/configure_test.sh` so the fake CMake reads the wrapper and toolchain files and rejects the invocation unless their required statements are present. This remains offline and does not require CMake to be installed before Task 5. Assert failure before the files exist, then assert the wrapper:
+After confirming that exact list, run:
 
-- includes `CheckFunctionExists` and `CheckIncludeFiles` before `add_subdirectory`;
-- sets nonempty deterministic `VERSION=0.0.0-gate2`, `TAG_APPLICATION=AirDCCore`, `APPLICATION_ID=com.aibece.airdccore.gate2`, `RESOURCE_DIRECTORY=<binary>/resources`, and `GLOBAL_CONFIG_DIRECTORY=<binary>/config`;
-- rejects non-Apple compiler IDs and non-ARM64 architecture;
-- prepends a wrapper-owned module directory so a later evidence-backed adapter can be added without editing upstream;
-- never writes the upstream source tree.
+```bash
+HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake ninja boost bzip2 zlib leveldb libmaxminddb snappy
+```
 
-The fake `xcrun` must resolve fixture `clang`/`clang++` paths. Add negative cases that rewrite the fake CMake compiler identity or architecture result and verify the wrapper contract fails. Real CMake syntax and target validation occur in the Task 5 live gate after prerequisite approval.
+Do not install `libnatpmp`, `tbb`, WebSocket++, nlohmann-json, npm, or Boost system separately. Re-run `missing_required_formulae`; expected output is empty. Package installation changes the host, not the repository, and creates no commit.
 
-- [ ] **Step 3: Run the focused test to verify RED**
+- [ ] **Step 2: Capture deterministic host inventory before any configure**
 
-Run: `rtk ./tests/configure_test.sh`
+Load the helper and run:
 
-Expected: FAIL because the wrapper and toolchain files do not exist.
+```bash
+. ./scripts/lib/configure.sh
+PROJECT_ROOT=$PWD
+export PROJECT_ROOT
+mkdir -p Build/airdcpp-core/evidence
+write_host_inventory "$PROJECT_ROOT/Build/airdcpp-core/evidence/host-inventory.txt"
+```
 
-- [ ] **Step 4: Create the top-level configure-only wrapper**
+Expected: sorted inventory contains exact versions and resolved prefixes for all required formulas, explicitly says optional `libnatpmp` and `tbb` are absent, and contains no `/Users/` path.
 
-Create `CMakeLists.txt` with this contract:
+- [ ] **Step 3: Preserve the first unmodified standalone configure attempt**
+
+Create only `Build/airdcpp-core/unmodified`, record the literal normalized command in `command.txt`, and run the pinned source directly with no wrapper, no local module path, and no source edits:
+
+```bash
+cmake -S Source/airdcpp-core -B Build/airdcpp-core/unmodified -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+  -DCMAKE_CXX_STANDARD=20 \
+  -DCMAKE_CXX_EXTENSIONS=OFF \
+  -DCMAKE_FIND_DEBUG_MODE=ON
+```
+
+Do not pass `ENABLE_NATPMP` or `ENABLE_TBB` to this command: omitting them preserves upstream's default-ON behavior for the first observation. Capture combined stdout/stderr in `configure.log`, write the numeric status to `exit-code.txt`, and write upstream commit, SHA-256 of upstream `CMakeLists.txt`, pre-configure status, post-configure status, and the two generated-file fingerprints to `inputs.txt`. Expected first defect: an unknown `CHECK_FUNCTION_EXISTS` or `CHECK_INCLUDE_FILES` command caused by the absent CMake module includes. Also record CMake's ordering warning if it reports upstream `project()` before `cmake_minimum_required()`. Preserve this directory unchanged for the rest of Gate 2 even if the command succeeds earlier or fails differently.
+
+- [ ] **Step 4: Write the failing CMake wrapper tests**
+
+Create `tests/fixtures/configure-upstream/CMakeLists.txt` as a nested project that calls both check commands, asserts all parent variables are non-empty, asserts Release/static/C++20/arm64/14.0/OFF/OFF values, and declares `add_library(airdcpp INTERFACE)`.
+
+Create `tests/cmake_wrapper_test.sh` with these cases:
+
+```sh
+cmake -S "$ROOT" -B "$WORK/good" -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchains/macos-arm64.cmake" \
+  -DAIRDCPP_CORE_SOURCE_DIR="$ROOT/tests/fixtures/configure-upstream"
+assert_line "$WORK/good/airdcpp-configure-summary.txt" "compiler.id=AppleClang" "compiler"
+assert_line "$WORK/good/airdcpp-configure-summary.txt" "architecture=arm64" "architecture"
+assert_line "$WORK/good/airdcpp-configure-summary.txt" "deployment_target=14.0" "deployment target"
+assert_line "$WORK/good/airdcpp-configure-summary.txt" "cxx_standard=20" "language standard"
+assert_line "$WORK/good/airdcpp-configure-summary.txt" "enable_natpmp=OFF" "NAT-PMP policy"
+assert_line "$WORK/good/airdcpp-configure-summary.txt" "enable_tbb=OFF" "TBB policy"
+
+if cmake -S "$ROOT" -B "$WORK/wrong-mode" -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchains/macos-arm64.cmake" \
+  -DAIRDCPP_CORE_SOURCE_DIR="$ROOT/tests/fixtures/configure-upstream" \
+  -DCMAKE_BUILD_TYPE=Debug >"$WORK/wrong-mode.log" 2>&1; then
+  fail "Debug configure unexpectedly succeeded"
+fi
+assert_contains "$(cat "$WORK/wrong-mode.log")" "CMAKE_BUILD_TYPE must be Release" "Release rejection"
+```
+
+Add matching negative cases for `x86_64`, shared libraries, and C++17. Add successful diagnostic cases for deployment targets `13.0` and `15.0` and for explicitly enabled NAT-PMP/TBB; these values are allowed only for isolated evidence probes, while the stable script always supplies `14.0` and OFF/OFF. Test `airdcpp_require_apple_clang()` in CMake script mode with injected `GNU`/`Clang` IDs and require the exact `Apple Clang is required` diagnostic. Finally scan `CMakeLists.txt` and the toolchain for compiler/link flags outside the declared policy.
+
+Run `chmod +x tests/cmake_wrapper_test.sh` after creating the file.
+
+- [ ] **Step 5: Run the wrapper test to verify it fails**
+
+Run: `./tests/cmake_wrapper_test.sh`
+
+Expected: FAIL because the wrapper/toolchain/policy module do not exist.
+
+- [ ] **Step 6: Implement the toolchain and testable policy functions**
+
+Create `cmake/toolchains/macos-arm64.cmake`:
+
+```cmake
+set(CMAKE_SYSTEM_NAME Darwin)
+set(CMAKE_SYSTEM_PROCESSOR arm64)
+
+execute_process(COMMAND /usr/bin/xcrun --find clang
+  OUTPUT_VARIABLE AIRDCCORE_APPLE_CLANG OUTPUT_STRIP_TRAILING_WHITESPACE
+  COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND /usr/bin/xcrun --find clang++
+  OUTPUT_VARIABLE AIRDCCORE_APPLE_CLANGXX OUTPUT_STRIP_TRAILING_WHITESPACE
+  COMMAND_ERROR_IS_FATAL ANY)
+
+set(CMAKE_C_COMPILER "${AIRDCCORE_APPLE_CLANG}" CACHE FILEPATH "Apple Clang C compiler")
+set(CMAKE_CXX_COMPILER "${AIRDCCORE_APPLE_CLANGXX}" CACHE FILEPATH "Apple Clang C++ compiler")
+set(CMAKE_OSX_SYSROOT macosx CACHE STRING "macOS SDK")
+set(CMAKE_OSX_ARCHITECTURES arm64 CACHE STRING "Supported architecture")
+set(CMAKE_OSX_DEPLOYMENT_TARGET 14.0 CACHE STRING "Discovery deployment target")
+```
+
+Do not add a `-stdlib` flag: Apple Clang's native libc++ default is the policy. Record `CMAKE_CXX_IMPLICIT_LINK_LIBRARIES` and the compiler identity in the summary as the evidence, and reject non-Apple compilers.
+
+Create `cmake/modules/AirDCCorePolicy.cmake`. `airdcpp_require_apple_clang()` rejects unless both `CMAKE_C_COMPILER_ID` and `CMAKE_CXX_COMPILER_ID` equal `AppleClang`; `airdcpp_require_value` emits `FATAL_ERROR "<name> must be <expected>; got <actual>"`; `airdcpp_record_target` appends target existence, type, imported location/configurations, include directories, and interface libraries in stable field order.
+
+- [ ] **Step 7: Implement the top-level wrapper**
+
+Create `CMakeLists.txt` with this policy order:
 
 ```cmake
 cmake_minimum_required(VERSION 3.25)
-project(AirDCCoreNativeDiscovery LANGUAGES C CXX)
+project(AirDCCoreMacOS LANGUAGES C CXX)
 
-if(NOT AIRDCCORE_GATE2)
-  message(FATAL_ERROR "This wrapper currently supports Gate 2 configure discovery only")
-endif()
-if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-  message(FATAL_ERROR "Gate 2 requires Apple Clang")
-endif()
-if(NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-  message(FATAL_ERROR "Gate 2 requires CMAKE_OSX_ARCHITECTURES=arm64")
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
+include(AirDCCorePolicy)
+airdcpp_require_apple_clang()
+
+set(CMAKE_BUILD_TYPE Release CACHE STRING "Single-config discovery mode")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries")
+set(CMAKE_CXX_STANDARD 20 CACHE STRING "Required C++ standard")
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(ENABLE_NATPMP OFF CACHE BOOL "Deterministic Phase 2 NAT-PMP policy")
+set(ENABLE_TBB OFF CACHE BOOL "Deterministic Phase 2 TBB policy")
+
+airdcpp_require_value(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" Release)
+airdcpp_require_value(BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS}" OFF)
+airdcpp_require_value(CMAKE_OSX_ARCHITECTURES "${CMAKE_OSX_ARCHITECTURES}" arm64)
+airdcpp_require_value(CMAKE_CXX_STANDARD "${CMAKE_CXX_STANDARD}" 20)
+
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET MATCHES "^(13\\.0|14\\.0|15\\.0)$")
+  message(FATAL_ERROR "deployment target must be one of 13.0, 14.0, or 15.0")
 endif()
 
 include(CheckFunctionExists)
 include(CheckIncludeFiles)
-list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
-set(VERSION "0.0.0-gate2")
-set(TAG_APPLICATION "AirDCCore")
-set(APPLICATION_ID "com.aibece.airdccore.gate2")
-set(RESOURCE_DIRECTORY "${CMAKE_BINARY_DIR}/resources")
-set(GLOBAL_CONFIG_DIRECTORY "${CMAKE_BINARY_DIR}/config")
-add_subdirectory(Source/airdcpp-core airdcpp-core)
+
+set(VERSION 0.0.0 CACHE STRING "Configure-only upstream target version")
+set(TAG_APPLICATION AirDCCore-macOS CACHE STRING "Configure-only application name")
+set(APPLICATION_ID org.airdcpp.core.macos.configure CACHE STRING "Configure-only application identifier")
+set(RESOURCE_DIRECTORY share/airdcpp CACHE STRING "Runtime resource contract")
+set(GLOBAL_CONFIG_DIRECTORY "Library/Application Support/AirDC++" CACHE STRING "Runtime config contract")
+set(PROJECT_NAME_GLOBAL AirDCCore CACHE STRING "Parent project name")
+set(AIRDCPP_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/airdcpp-core" CACHE PATH "Pinned source checkout")
+
+add_subdirectory("${AIRDCPP_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/upstream")
 ```
 
-Task 3 must add `-DAIRDCCORE_GATE2=ON` to the wrapped invocation only.
+After `add_subdirectory`, generate `airdcpp-configure-summary.txt` with compiler IDs/paths, SDK, architecture, target, build type, language standard/extensions, shared/static mode, optional flags, upstream source path, and parent-style values. Record required imported targets in this exact order: `BZip2::BZip2`, `ZLIB::ZLIB`, `OpenSSL::SSL`, `OpenSSL::Crypto`, `miniupnpc::miniupnpc`, `leveldb::leveldb`, `maxminddb::maxminddb`, `Boost::thread`, `Boost::regex`, `Snappy::snappy`, `Threads::Threads`, `Iconv::Iconv`.
 
-- [ ] **Step 5: Create the native toolchain**
+- [ ] **Step 8: Run wrapper tests, then capture the wrapper-only package failure**
 
-Create `cmake/toolchains/macos-arm64.cmake` that finds `xcrun`, resolves `clang` and `clang++` with `execute_process`, fails on missing/nonzero/empty results, sets `CMAKE_C_COMPILER` and `CMAKE_CXX_COMPILER` as cache file paths before `project()`, and sets `CMAKE_OSX_ARCHITECTURES=arm64`. Require `CMAKE_OSX_DEPLOYMENT_TARGET` from the caller and reject any architecture other than `arm64`; do not add explicit `-stdlib` flags because Apple Clang's libc++ default is the contract.
+Run: `./tests/cmake_wrapper_test.sh`
 
-Do not add find modules or any upstream patch in this task. A later live mismatch must enter the Task 5 review/fix loop with preserved raw package evidence first.
+Expected: `PASS: ARM64 CMake wrapper policy`.
 
-- [ ] **Step 6: Verify GREEN and commit**
+Then configure the real pinned source with the wrapper but temporarily move no files and supply no package adapters beyond the not-yet-created module files. Use the same fixed flags, Homebrew prefix list, explicit BZip2/ZLIB/OpenSSL/Iconv hints, and `CMAKE_FIND_DEBUG_MODE=ON`; capture it under `Build/airdcpp-core/wrapper-baseline`. Expected: check functions now execute and configuration advances to an exact package mismatch, with `miniupnpc` expected first because its installed formula has no CMake config. Preserve the literal command, complete log, and numeric status.
 
-Run all offline suites, hermetic wrapper/toolchain fixture coverage, shell syntax, and diff checks. Assert Git tracks no file below `Source`, `Dependencies`, `Build`, or `Dist`.
+- [ ] **Step 9: Verify no upstream mutation and commit wrapper policy**
 
-Commit:
+Run:
 
 ```bash
-rtk git add CMakeLists.txt cmake/toolchains/macos-arm64.cmake tests/configure_test.sh scripts/lib/native-discovery.sh
-rtk git commit -m "feat: add native configure wrapper"
+git -C Source/airdcpp-core status --porcelain=v1 --untracked-files=all
+git diff --check
 ```
 
-### Task 5: Prove live Gate 2, generate normalized evidence, and document the boundary
+Expected: upstream status and generated-file fingerprints match the pre-configure record; parent diff check passes.
+
+```bash
+git add CMakeLists.txt cmake/toolchains/macos-arm64.cmake \
+  cmake/modules/AirDCCorePolicy.cmake tests/cmake_wrapper_test.sh \
+  tests/fixtures/configure-upstream/CMakeLists.txt
+git commit -m "feat: establish ARM64 configure wrapper"
+```
+
+---
+
+### Task 3: Add Evidence-Backed Homebrew Package Adapters
+
+**Files:**
+- Create: `cmake/modules/Findminiupnpc.cmake`
+- Create: `cmake/modules/Findmaxminddb.cmake`
+- Create: `tests/find_modules_test.sh`
+- Modify: `CMakeLists.txt`
+- Evidence only, ignored: `Build/airdcpp-core/release/{configure.log,CMakeCache.txt,airdcpp-configure-summary.txt}`
+
+**Interfaces:**
+- Consumes: CMake's `FindPackageHandleStandardArgs`, optional `PkgConfig`, formula prefix hints, and wrapper target-evidence function.
+- Produces: imported targets `miniupnpc::miniupnpc` and `maxminddb::maxminddb`, each with one resolved include directory, one resolved library, and optional discovered version.
+
+- [ ] **Step 1: Re-inspect the exact package failure and formula layouts**
+
+Run:
+
+```bash
+grep -E 'Could not find|Config.cmake|cmake|pkgconfig|miniupnpc|maxminddb' \
+  Build/airdcpp-core/wrapper-baseline/configure.log
+find "$(brew --prefix miniupnpc)" -maxdepth 4 -type f -print
+find "$(brew --prefix libmaxminddb)" -maxdepth 4 -type f -print
+```
+
+Expected: the log and layouts justify only the two adapter files in this task. If a different required package still cannot resolve from the explicit formula prefix/root hints, Gate 2 is blocked: retain the log, stop implementation, and request a plan amendment instead of adding an unreviewed module or upstream patch.
+
+- [ ] **Step 2: Write failing fake-prefix tests for both modules**
+
+Create `tests/find_modules_test.sh`. For each package, create a temporary prefix with the exact header and an empty archive produced by `ar -cr`, then create a small CMake fixture that sets `CMAKE_MODULE_PATH` to the repository modules, calls `find_package(<name> REQUIRED)`, and rejects unless the namespaced target has the expected imported location and include directory.
+
+Use these package expectations:
+
+```text
+miniupnpc header: include/miniupnpc/miniupnpc.h
+miniupnpc library: lib/libminiupnpc.a
+miniupnpc target: miniupnpc::miniupnpc
+maxminddb header: include/maxminddb.h
+maxminddb library: lib/libmaxminddb.a
+maxminddb target: maxminddb::maxminddb
+```
+
+Also test missing header, missing library, paths containing spaces, and repeated `find_package` calls.
+
+Run `chmod +x tests/find_modules_test.sh` after creating the file.
+
+- [ ] **Step 3: Run the module tests to verify they fail**
+
+Run: `./tests/find_modules_test.sh`
+
+Expected: FAIL because both `Find` modules are absent.
+
+- [ ] **Step 4: Implement the two minimal `Find` modules**
+
+Each module must use this exact structure with its package-specific names:
+
+```cmake
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+  pkg_check_modules(PC_MINIUPNPC QUIET miniupnpc)
+endif()
+
+find_path(miniupnpc_INCLUDE_DIR
+  NAMES miniupnpc/miniupnpc.h
+  HINTS ${PC_MINIUPNPC_INCLUDE_DIRS})
+find_library(miniupnpc_LIBRARY
+  NAMES miniupnpc
+  HINTS ${PC_MINIUPNPC_LIBRARY_DIRS})
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(miniupnpc
+  REQUIRED_VARS miniupnpc_INCLUDE_DIR miniupnpc_LIBRARY
+  VERSION_VAR PC_MINIUPNPC_VERSION)
+
+if(miniupnpc_FOUND AND NOT TARGET miniupnpc::miniupnpc)
+  add_library(miniupnpc::miniupnpc UNKNOWN IMPORTED)
+  set_target_properties(miniupnpc::miniupnpc PROPERTIES
+    IMPORTED_LOCATION "${miniupnpc_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${miniupnpc_INCLUDE_DIR}")
+endif()
+
+mark_as_advanced(miniupnpc_INCLUDE_DIR miniupnpc_LIBRARY)
+```
+
+Use `PC_MAXMINDDB`, pkg-config module `libmaxminddb`, header `maxminddb.h`, library name `maxminddb`, and target `maxminddb::maxminddb` in the second module. Do not encode `/opt/homebrew`, a Cellar version, or a user path in either tracked module.
+
+- [ ] **Step 5: Run adapter tests and wrapper fixture tests**
+
+Run: `./tests/find_modules_test.sh && ./tests/cmake_wrapper_test.sh`
+
+Expected: both scripts print `PASS`.
+
+- [ ] **Step 6: Configure the real pinned source through the final wrapper**
+
+Use `Build/airdcpp-core/release`, `--fresh`, Ninja, the tracked toolchain, the deterministic policy flags, a semicolon-delimited prefix list from required formulas, a colon-delimited `PKG_CONFIG_PATH`, and explicit Homebrew paths for modules that otherwise prefer SDK copies:
+
+```bash
+. ./scripts/lib/configure.sh
+CMAKE_PREFIX_PATH=$(dependency_cmake_prefix_path)
+PKG_CONFIG_PATH=$(dependency_pkg_config_path)
+export CMAKE_PREFIX_PATH PKG_CONFIG_PATH
+PKG_CONFIG_PATH="$PKG_CONFIG_PATH" cmake --fresh \
+  -S . -B Build/airdcpp-core/release -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/macos-arm64.cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DCMAKE_CXX_STANDARD=20 \
+  -DCMAKE_CXX_EXTENSIONS=OFF \
+  -DENABLE_NATPMP=OFF \
+  -DENABLE_TBB=OFF \
+  -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" \
+  -DBZIP2_ROOT="$(brew --prefix bzip2)" \
+  -DZLIB_ROOT="$(brew --prefix zlib)" \
+  -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+  -DIconv_INCLUDE_DIR="$(brew --prefix libiconv)/include" \
+  -DIconv_LIBRARY="$(brew --prefix libiconv)/lib/libiconv.dylib" \
+  -DCMAKE_FIND_DEBUG_MODE=ON
+```
+
+The shell helper computes both environment variables rather than trusting ambient values. Expected: configure exits 0, creates Ninja configuration only, records all imported targets and paths, uses Apple Clang, and does not compile or link the core.
+
+- [ ] **Step 7: Inspect deployment-target and optional-feature evidence**
+
+Run configure-only probes in separate ignored directories for deployment targets `13.0`, `14.0`, and `15.0`, always with NAT-PMP/TBB OFF. Record compiler-test acceptance and package resolution for each. Keep `14.0` as the reviewed Phase 2 target because it is the declared broad-compatibility baseline and requires no legacy-specific patch; explicitly note that Homebrew bottle minimum OS compatibility is not accepted as a final publication guarantee.
+
+Create one additional ignored wrapper probe at `Build/airdcpp-core/optional-on` using the exact final command except `-DENABLE_NATPMP=ON -DENABLE_TBB=ON`. Expected with the recorded host inventory: configure remains nonfatal, `natpmp` and TBB are reported not found, `Mapper_NATPMP.cpp` is removed, and neither `HAVE_NATPMP_H` nor `HAVE_INTEL_TBB` appears. Compare that evidence with the source-inspected upstream defaults and the final OFF/OFF log; final configure must not search for or resolve `libnatpmp` or `TBB::tbb`.
+
+- [ ] **Step 8: Commit package adapters**
+
+```bash
+git add cmake/modules/Findminiupnpc.cmake cmake/modules/Findmaxminddb.cmake \
+  tests/find_modules_test.sh CMakeLists.txt
+git commit -m "feat: adapt Homebrew configure packages"
+```
+
+---
+
+### Task 4: Implement the Stable Configure-Only Build Entry Point
+
+**Files:**
+- Create: `scripts/build`
+- Create: `tests/build_configure_test.sh`
+- Modify: `scripts/lib/configure.sh`
+
+**Interfaces:**
+- Consumes: Task 1 helper functions, top-level wrapper/toolchain, exact upstream checkout, and Homebrew package prefixes.
+- Produces: command `scripts/build --configure-only`; ignored evidence directories `Build/airdcpp-core/unmodified` and `Build/airdcpp-core/release`; exit 0 only for a successful deterministic final configure.
+
+- [ ] **Step 1: Write failing entry-point integration tests with fake tools**
+
+Create `tests/build_configure_test.sh` around a temporary case project copied from tracked files. Fake `cmake` must log every argument, create a minimal `CMakeCache.txt` and `airdcpp-configure-summary.txt`, return 1 for the direct upstream source, and return 0 for the wrapper source. Cover:
+
+```sh
+if output=$("$CASE_ROOT/scripts/build" 2>&1); then fail "missing mode succeeded"; fi
+assert_contains "$output" "usage: scripts/build --configure-only" "usage"
+
+if output=$("$CASE_ROOT/scripts/build" --compile 2>&1); then fail "compile mode succeeded"; fi
+assert_contains "$output" "Phase 2 supports only --configure-only" "scope diagnostic"
+
+output=$(PATH="$FAKE_BIN:$PATH" "$CASE_ROOT/scripts/build" --configure-only)
+assert_contains "$output" "preserved unmodified configure status 1" "first attempt"
+assert_contains "$output" "configure-only Gate 2 candidate succeeded" "final configure"
+assert_file_present "$CASE_ROOT/Build/airdcpp-core/unmodified/configure.log"
+assert_file_present "$CASE_ROOT/Build/airdcpp-core/release/CMakeCache.txt"
+assert_dir_absent "$CASE_ROOT/Dist"
+assert_file_absent "$CASE_ROOT/Build/airdcpp-core/release/libairdcpp.a"
+```
+
+Build the fake CMake command with this exact dispatcher so the test proves source selection and invocation count without configuring or compiling:
+
+```sh
+printf '%s\n' \
+  '#!/bin/sh' \
+  'set -eu' \
+  'case "${1:-}" in --version) echo "cmake version 3.31.6"; exit 0 ;; -N) cat "$3/CMakeCache.txt"; exit 0 ;; esac' \
+  'printf "%s\n" "$*" >> "$FAKE_CMAKE_CALLS"' \
+  'case " $* " in *" --build "*) echo "forbidden build invocation" >&2; exit 97 ;; esac' \
+  'source_dir=' \
+  'build_dir=' \
+  'while [ "$#" -gt 0 ]; do' \
+  '  case "$1" in -S) source_dir=$2; shift 2 ;; -B) build_dir=$2; shift 2 ;; *) shift ;; esac' \
+  'done' \
+  'mkdir -p "$build_dir"' \
+  'case "$source_dir" in' \
+  '  */Source/airdcpp-core) echo "unknown CMake command CHECK_FUNCTION_EXISTS"; exit 1 ;;' \
+  '  *)' \
+  '    printf "CMAKE_BUILD_TYPE:STRING=Release\n" > "$build_dir/CMakeCache.txt"' \
+  '    printf "architecture=arm64\ndeployment_target=14.0\nbuild_shared_libs=OFF\n" > "$build_dir/airdcpp-configure-summary.txt" ;;' \
+  'esac' > "$FAKE_BIN/cmake"
+chmod +x "$FAKE_BIN/cmake"
+
+for forbidden_tool in ninja clang clang++ ar libtool; do
+  printf '%s\n' '#!/bin/sh' 'echo "forbidden Phase 3 tool invocation" >&2' 'exit 97' \
+    > "$FAKE_BIN/$forbidden_tool"
+  chmod +x "$FAKE_BIN/$forbidden_tool"
+done
+```
+
+Run `chmod +x tests/build_configure_test.sh` after creating the test. Run `chmod +x scripts/build` immediately after adding the entry point in Step 4 so its executable bit is part of the implementation commit.
+
+Run the command a second time. Assert the unmodified log checksum is identical, its command is not invoked twice, final configure uses `--fresh`, and inventory lines remain stable. Add failure cases for missing formulas, wrong commit, dirty upstream, non-Apple compiler, a failed final configure, a symlinked `Build/airdcpp-core`, and pre-existing `Dist`. A pre-existing `Dist` must remain byte-for-byte untouched. Make fake `cmake` fail if any argument is `--build`; make fake `ninja`, `clang`, `clang++`, `ar`, or `libtool` fail immediately if invoked.
+
+- [ ] **Step 2: Run the entry-point tests to verify they fail**
+
+Run: `./tests/build_configure_test.sh`
+
+Expected: FAIL because `scripts/build` does not exist.
+
+- [ ] **Step 3: Add evidence-preservation helpers**
+
+Extend `scripts/lib/configure.sh` with:
+
+```text
+capture_unmodified_configure(project_root, checkout, evidence_dir, cmake_prefix_path, pkg_config_path)
+run_wrapper_configure(project_root, output_dir, cmake_prefix_path, pkg_config_path)
+assert_configure_scope(project_root, before_parent_status, before_upstream_state)
+```
+
+`capture_unmodified_configure` creates the directory only if absent, writes normalized command/input/status files atomically, captures combined output, and never converts the expected diagnostic failure into overall script failure. If the directory already has all four files and its `inputs.txt` matches upstream commit, upstream `CMakeLists.txt` SHA-256, CMake version, formula inventory checksum, architecture, and deployment target, print a reuse message and do not overwrite it. If it is partial or its inputs differ, fail with the exact instruction `archive or remove Build/airdcpp-core/unmodified before recapturing changed inputs`.
+
+`run_wrapper_configure` validates that the output is a real directory below `Build/airdcpp-core`, invokes CMake with `--fresh` and the exact Task 3 flags, saves combined output and a normalized literal command, then runs `cmake -N -LA` into `cache.txt`. It must not invoke any build tool.
+
+`assert_configure_scope` compares parent Git status, upstream `HEAD`, origin, tracked/staged/untracked/unknown-ignored state, and known-generated-file fingerprints. It rejects any new `Dependencies` or `Dist` path and any file outside `Build/airdcpp-core` except tracked files already part of the implementation.
+
+- [ ] **Step 4: Implement `scripts/build --configure-only`**
+
+Use this control flow:
+
+```sh
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ] || [ "$1" != --configure-only ]; then
+  printf 'usage: scripts/build --configure-only\n' >&2
+  printf 'build: error: Phase 2 supports only --configure-only\n' >&2
+  exit 64
+fi
+
+PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+CHECKOUT=$PROJECT_ROOT/Source/airdcpp-core
+BUILD_ROOT=$PROJECT_ROOT/Build/airdcpp-core
+. "$PROJECT_ROOT/scripts/lib/upstream.sh"
+. "$PROJECT_ROOT/scripts/lib/configure.sh"
+
+load_upstream_config "$PROJECT_ROOT/config/upstream.env" || exit 1
+assert_supported_host
+validate_configure_checkout "$PROJECT_ROOT" "$CHECKOUT" "$AIRDCPP_CORE_COMMIT"
+
+missing=$(missing_required_formulae)
+[ -z "$missing" ] || configure_die "missing required Homebrew formulae:\n$missing\ninstall only these names with brew install"
+
+[ ! -L "$PROJECT_ROOT/Build" ] || configure_die "refusing symlinked Build directory"
+mkdir -p "$PROJECT_ROOT/Build"
+[ ! -e "$BUILD_ROOT" ] || [ -d "$BUILD_ROOT" ] || configure_die "Build/airdcpp-core is not a directory"
+[ ! -L "$BUILD_ROOT" ] || configure_die "refusing symlinked Build/airdcpp-core"
+mkdir -p "$BUILD_ROOT/evidence"
+
+before_parent_status=$(git -C "$PROJECT_ROOT" status --porcelain=v1 --untracked-files=all)
+before_upstream_state=$(git -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)
+cmake_prefix_path=$(dependency_cmake_prefix_path)
+pkg_config_path=$(dependency_pkg_config_path)
+
+write_host_inventory "$BUILD_ROOT/evidence/host-inventory.txt"
+capture_unmodified_configure "$PROJECT_ROOT" "$CHECKOUT" \
+  "$BUILD_ROOT/unmodified" "$cmake_prefix_path" "$pkg_config_path"
+run_wrapper_configure "$PROJECT_ROOT" "$BUILD_ROOT/release" \
+  "$cmake_prefix_path" "$pkg_config_path"
+assert_configure_scope "$PROJECT_ROOT" "$before_parent_status" "$before_upstream_state"
+
+printf 'build: configure-only Gate 2 candidate succeeded; no AirDC++ Core compilation was invoked\n'
+```
+
+Before CMake runs, print source commit, compiler path/version, architecture, deployment target, Release/static/C++20/libc++ policy, NAT-PMP/TBB flags, Homebrew prefix, formula versions, build mode, and evidence paths. On final failure, report the failed phase, exact log path, and corrective action. On success, print `build: configure-only Gate 2 candidate succeeded; no compilation was invoked`.
+
+- [ ] **Step 5: Run hermetic entry-point and all offline tests**
+
+Run:
+
+```bash
+./tests/build_configure_test.sh
+./tests/configure_helpers_test.sh
+./tests/cmake_wrapper_test.sh
+./tests/find_modules_test.sh
+./tests/upstream_config_test.sh
+./tests/update_test.sh
+```
+
+Expected: every script prints `PASS`; no test contacts the network or Homebrew API, no `Dist` exists, and no core artifact exists.
+
+- [ ] **Step 6: Commit configure orchestration**
+
+```bash
+git add scripts/build scripts/lib/configure.sh tests/build_configure_test.sh
+git commit -m "feat: add configure-only build orchestration"
+```
+
+---
+
+### Task 5: Exercise and Lock the Real Gate 2 Test
 
 **Files:**
 - Create: `tests/gate2_configure_test.sh`
-- Create: `docs/gate2-native-configure-report.md`
-- Conditionally create after live evidence: `cmake/modules/Findmaxminddb.cmake` or another single-package wrapper adapter
-- Modify: `scripts/lib/native-discovery.sh`
+- Evidence only, ignored: `Build/airdcpp-core/evidence/*`
+- Evidence only, ignored: `Build/airdcpp-core/unmodified/*`
+- Evidence only, ignored: `Build/airdcpp-core/release/*`
+
+**Interfaces:**
+- Consumes: `AIRDCCORE_RUN_CONFIGURE_TESTS=1`, the real installed formula set, pinned upstream checkout, and `scripts/build --configure-only`.
+- Produces: one real configure-only Gate 2 assertion with no AirDC++ Core target build, package installation, or publication side effects.
+
+- [ ] **Step 1: Write the opt-in Gate 2 test before relying on the real configure**
+
+Create `tests/gate2_configure_test.sh` with this contract:
+
+```sh
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+. "$ROOT/tests/test_helper.sh"
+. "$ROOT/scripts/lib/upstream.sh"
+
+[ "${AIRDCCORE_RUN_CONFIGURE_TESTS:-0}" = 1 ] ||
+  fail "set AIRDCCORE_RUN_CONFIGURE_TESTS=1 to run the real Gate 2 configure test"
+
+CHECKOUT=$ROOT/Source/airdcpp-core
+BEFORE_PARENT=$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)
+BEFORE_UPSTREAM=$(git -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)
+
+output=$("$ROOT/scripts/build" --configure-only)
+assert_contains "$output" "no compilation was invoked" "configure-only success"
+assert_line "$ROOT/Build/airdcpp-core/release/airdcpp-configure-summary.txt" \
+  "architecture=arm64" "configured architecture"
+assert_line "$ROOT/Build/airdcpp-core/release/airdcpp-configure-summary.txt" \
+  "deployment_target=14.0" "configured target"
+assert_line "$ROOT/Build/airdcpp-core/release/airdcpp-configure-summary.txt" \
+  "build_shared_libs=OFF" "static policy"
+assert_file_absent "$ROOT/Build/airdcpp-core/release/libairdcpp.a"
+assert_dir_absent "$ROOT/Dist"
+assert_dir_absent "$ROOT/Dependencies"
+assert_eq "$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)" \
+  "$BEFORE_PARENT" "parent status"
+assert_eq "$(git -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)" \
+  "$BEFORE_UPSTREAM" "upstream status"
+
+printf 'PASS: Gate 2 configured pinned AirDC++ Core without compilation\n'
+```
+
+Extend it to assert exact upstream commit/origin, AppleClang IDs, C++20, libc++, Release, NAT-PMP/TBB OFF, all required target evidence, Homebrew resolved paths, first-attempt log immutability across a second run, and absence of AirDC++ Core `.o`, `.a`, `.dylib`, Ninja invocation logs, `Dist`, and `Dependencies` output. Permit only CMake's own compiler-identification and `Check*` probe products below `CMakeFiles`; `build.ninja` itself is an expected configure file, while executing Ninja is forbidden.
+
+Run `chmod +x tests/gate2_configure_test.sh` after creating the file.
+
+- [ ] **Step 2: Verify the opt-in guard fails safely**
+
+Run: `./tests/gate2_configure_test.sh`
+
+Expected: FAIL with the exact enablement instruction and no changed files.
+
+- [ ] **Step 3: Run the real Gate 2 configure twice**
+
+Run:
+
+```bash
+AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
+AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
+```
+
+Expected: both runs print `PASS`; the unmodified evidence checksum is unchanged; final configure is safely refreshed; no AirDC++ Core target compile command runs; parent and upstream state are unchanged.
+
+- [ ] **Step 4: Inspect exact package resolution and warnings**
+
+Run:
+
+```bash
+cmake -N -LA Build/airdcpp-core/release
+grep -E 'AIRDCCORE|_DIR:|_LIBRARY:|_INCLUDE_DIR:|AppleClang|arm64|14\.0|NATPMP|TBB' \
+  Build/airdcpp-core/release/configure.log
+find Build/airdcpp-core/release/upstream -type f \
+  \( -name '*.o' -o -name '*.a' -o -name '*.dylib' \)
+```
+
+Expected: every required package path is explainable by the recorded Homebrew prefix or selected SDK Threads interface; compiler/policy fields match; AirDC++ Core artifact search prints nothing. CMake compiler/check-probe products may exist outside the upstream target directory. Classify each warning as accepted discovery evidence or a Gate 2 blocker. Do not suppress a warning merely to make the report green.
+
+- [ ] **Step 5: Commit the real gate test**
+
+```bash
+git add tests/gate2_configure_test.sh
+git commit -m "test: lock configure-only Gate 2"
+```
+
+---
+
+### Task 6: Publish the Reviewed Gate 2 Report and Operator Documentation
+
+**Files:**
+- Create: `docs/reports/2026-09-05-gate-2-native-configure.md`
 - Modify: `README.md`
+- Modify: `docs/architecture.md`
 - Modify: `docs/dependencies.md`
 - Modify: `docs/build-and-release.md`
 
 **Interfaces:**
-- Consumes: `scripts/build --configure-only`, exact Phase 1 checkout, wrapper/toolchain, raw/wrapped logs, and explicit `AIRDCCORE_RUN_GATE2=1` consent.
-- Produces: two successful configure-only runs, stable normalized package-resolution evidence, `write_gate2_report ROOT OUTPUT`, and the reviewed Gate 2 report.
+- Consumes: preserved raw logs, final cache/summary, real Gate 2 test results, and the authoritative design.
+- Produces: a reviewable normalized evidence record and documented `scripts/build --configure-only` operator contract.
 
-- [ ] **Step 1: Write the opt-in live Gate 2 test before any live install/configure**
+- [ ] **Step 1: Write a failing report-contract check**
 
-Create executable `tests/gate2_configure_test.sh`. The consent check must be the first operation after resolving `ROOT`; it must occur before sourcing helpers that create files:
-
-```sh
-[ "${AIRDCCORE_RUN_GATE2:-0}" = 1 ] || {
-  printf 'FAIL: set AIRDCCORE_RUN_GATE2=1 to run the live Gate 2 configure test\n' >&2
-  exit 1
-}
-```
-
-After consent, validate the parent root, ignored `Source/airdcpp-core` and `Build`, exact manifest/pin/origin, clean detached source, non-symlink paths, and installed prerequisites. Snapshot upstream identity and allowed generated files. Run `scripts/build --configure-only` twice and assert both succeed; compare normalized evidence and `CMakeCache.txt` policy keys across runs.
-
-The first live run is also the first real-CMake validation of the wrapper, toolchain, and imported targets. It must verify that `CMAKE_C_COMPILER_ID` and `CMAKE_CXX_COMPILER_ID` are `AppleClang`, target `airdcpp` exists, all imported targets required by the pinned upstream resolve, and the selected Ninja generator completes generation without invoking a build.
-
-Assert raw evidence exists regardless of raw success/failure, its command omits wrapper/toolchain and optional-feature overrides, and its command/log/status/identity checksums survive the second run unchanged. Require wrapped status `0`, generator Ninja, all nine wrapped policy flags at their exact values, compiler IDs AppleClang, resolved architecture arm64, and every required package once in `package-resolution.tsv` with version and normalized resolved path. Assert optional `libnatpmp`/`tbb` availability is inventoried, the raw attempt retains upstream default-`ON` behavior wherever configuration reaches those probes, and the accepted wrapper result records both disabled regardless of host installation.
-
-Finally assert upstream snapshots are unchanged; no `.o`, `.a`, `.dylib`, compiler command, Ninja build command, `Dependencies`, or `Dist` exists. Print:
+Add a report validation section to `tests/gate2_configure_test.sh` that requires these exact headings and assertions:
 
 ```text
-PASS: Gate 2 configured the pinned AirDC++ Core twice for native arm64 without compiling
+## Scope and result
+## Source identity and cleanliness
+## Host and tool inventory
+## Homebrew formula inventory
+## Unmodified upstream configure
+## Wrapper-only configure
+## Adaptations and evidence
+## Final deterministic configure
+## Deployment target decision
+## Optional NAT-PMP and TBB behavior
+## Package resolution
+## Warnings and failures
+## Rerun and scope verification
+## Gate 2 review decision
 ```
 
-- [ ] **Step 2: Verify opt-in and offline regression before installing anything**
+Reject the report if it contains `/Users/`, claims that `Dist` or `libairdcpp.a` was produced, makes an AirDC++ Core compile-success claim, uses `ENABLE_NATPMP=ON` in the final-command section, uses `ENABLE_TBB=ON` in the final-command section, or claims package resolution for WebSocket++, nlohmann-json, npm, or Boost system. Allow optional ON values only in the clearly labeled unmodified and optional-probe sections, and require explicit statements that `Dist` and `libairdcpp.a` are absent.
 
-Run:
+- [ ] **Step 2: Run the report check to verify it fails**
 
-```bash
-rtk ./tests/gate2_configure_test.sh
-rtk ./tests/upstream_config_test.sh
-rtk ./tests/update_test.sh
-rtk ./tests/native_discovery_test.sh
-rtk ./tests/configure_test.sh
-```
+Run: `AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh`
 
-Expected: Gate 2 exits nonzero with the consent message and creates/modifies nothing; all four offline suites print `PASS:` and make no network request.
+Expected: FAIL because the tracked Gate 2 report is absent.
 
-- [ ] **Step 3: Print the exact missing prerequisite set and request approval**
+- [ ] **Step 3: Create the reviewed Gate 2 report from raw evidence**
 
-Run `rtk ./scripts/build --configure-only`.
+Create `docs/reports/2026-09-05-gate-2-native-configure.md` with every required heading. Include:
 
-On the verified planning host, expected missing formulae are:
+- exact upstream URL and full commit;
+- exact normalized commands using `$PROJECT_ROOT` rather than a user-home path;
+- macOS, architecture, Xcode/build, Apple Clang, SDK, Git, Python, Homebrew, CMake, and Ninja versions;
+- each required/optional formula version or explicit absence and its `/opt/homebrew/opt/<formula>` resolution;
+- unmodified exit code, first fatal diagnostic, warnings, default NAT-PMP/TBB observations, and the log SHA-256;
+- wrapper-only exit code and exact package/config mismatch;
+- a table mapping each wrapper/module adaptation to the prior evidence that justified it;
+- final exit code 0, cache/summary fields, imported-target locations/interfaces, package-config paths, warnings, and explicit no-compile proof;
+- deployment probes for 13.0, 14.0, and 15.0 plus the reviewed 14.0 selection and its limitations;
+- final NAT-PMP/TBB OFF evidence and statement that optional formula absence cannot alter the final configuration;
+- parent/upstream before-and-after status, generated-file fingerprints, idempotent second-run evidence, and absence of `Dependencies`, `Dist`, objects, archives, and shared libraries;
+- an explicit Gate 2 review decision. Mark Gate 2 accepted only when final configure and every scope assertion pass; otherwise mark it blocked and do not proceed to Phase 3.
+
+Do not copy broad environment dumps, timestamps, usernames, `/Users/...` paths, secrets, or unreviewed raw logs into the tracked report.
+
+- [ ] **Step 4: Update concise operator documentation**
+
+Update `README.md` with:
 
 ```text
-boost
-bzip2
-cmake
-leveldb
-libmaxminddb
-ninja
-snappy
-zlib
+./scripts/update
+./scripts/build --configure-only
+AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
 ```
 
-If the set differs, record the current sorted set; do not add packages outside the configured allowlist. The Phase 2 request already authorizes installation of missing required formulae during execution, so run:
+State that the first command reconstructs source, the second configures only, the third exercises the real Gate 2 check, Homebrew inputs are discovery-only, and Phase 3 compilation remains outside the command.
 
-```bash
-rtk ./scripts/build --configure-only --install-missing
-```
+Update `docs/architecture.md` with the flow `scripts/build -> scripts/lib/configure.sh -> wrapper/toolchain -> unmodified Source`, with all raw output below `Build/airdcpp-core` and only the normalized report tracked.
 
-This command may install only the reported missing required formulae. If the execution environment requires a sandbox escalation, request that command-scoped approval; a refusal or Homebrew failure stops Gate 2 without weakening checks.
+Update `docs/dependencies.md` with the exact Gate 2 formula inventory, resolved paths, explicit NAT-PMP/TBB OFF policy, and a warning that no Phase 2 formula becomes a publication dependency or `Dependencies` source pin.
 
-- [ ] **Step 4: Run and preserve the unmodified upstream configure attempt**
+Update `docs/build-and-release.md` with Gate 2 commands, enablement variable, expected report path, configure-only guarantees, and the hard stop before Phase 3.
 
-Immediately before configuration, repeat the Task 4 upstream CMake inspection and source snapshots. Run the approved install command if needed, then run:
-
-```bash
-rtk ./scripts/build --configure-only
-```
-
-Expected raw evidence on the pinned snapshot includes the unmodified source command and either success or the known `CHECK_FUNCTION_EXISTS`/`CHECK_INCLUDE_FILES` standalone failure. Do not edit upstream. If the raw failure differs, stop and review the log before changing the wrapper, module adapters, flags, or dependency set.
-
-- [ ] **Step 5: Resolve live wrapper mismatches only through evidence-backed fix loops**
-
-If the wrapped configure fails, classify the exact failure:
-
-- missing configured required formula: correct the prerequisite allowlist only when upstream `find_package` evidence names it;
-- target-name/config mismatch: add the smallest wrapper-side `Find<Package>.cmake` that creates exactly the upstream-requested target from validated CMake/pkg-config metadata;
-- missing parent variable/check module: set/include it in the top-level wrapper;
-- upstream defect not correctable from the wrapper: stop, re-inspect the pinned file, add a failing hermetic test and deterministic patch proposal under `cmake/patches/airdcpp-core`, and require user/reviewer approval before applying it.
-
-Never add WebSocket++, nlohmann-json, npm, Boost `system`, source-built dependencies, or compile flags without direct log evidence. Repeat the focused RED/GREEN test and task review after each accepted change.
-
-For the currently anticipated `maxminddb` mismatch, create `cmake/modules/Findmaxminddb.cmake` only if the live trace proves the installed `libmaxminddb` formula does not supply the requested CMake config/target. The minimal accepted adapter is:
-
-```cmake
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PC_MAXMINDDB REQUIRED IMPORTED_TARGET libmaxminddb)
-if(NOT TARGET maxminddb::maxminddb)
-  add_library(maxminddb::maxminddb INTERFACE IMPORTED)
-  target_link_libraries(maxminddb::maxminddb INTERFACE PkgConfig::PC_MAXMINDDB)
-endif()
-set(maxminddb_FOUND TRUE)
-```
-
-Before accepting it, add a hermetic failing case that reproduces the exact target/config mismatch, verify RED, add only this module, then verify GREEN and commit the test, module, and reportable evidence together with `feat: adapt evidenced maxminddb discovery`. If live discovery already supplies the target, do not create or commit this file.
-
-- [ ] **Step 6: Generate the tracked Gate 2 report deterministically**
-
-Implement `write_gate2_report ROOT OUTPUT` in `scripts/lib/native-discovery.sh`. Generate `docs/gate2-native-configure-report.md` from a fixed template/order containing:
-
-- exact upstream URL and commit;
-- host architecture, Xcode build, Apple Clang, Python, Homebrew version;
-- required/optional formula table with exact installed versions;
-- normalized package resolution paths using `<HOMEBREW_PREFIX>` and `<PROJECT_ROOT>`;
-- raw command/status/failure summary and raw log path;
-- wrapped command/status and exact policy values;
-- module/parent-variable/package mismatches and wrapper fixes;
-- NAT-PMP/TBB observed availability and explicit disabled baseline;
-- deployment target `13.0`, why it favors broad supported compatibility without a legacy patch, and the requirement for Phase 3 compile validation before it becomes final;
-- two-run idempotence comparison;
-- upstream cleanliness and no-compile/no-`Dist` assertions;
-- unresolved Phase 3 questions.
-
-The report generator must fail if any input contains an unresolved absolute project, home, or Homebrew path, a missing version/resolution, an unresolved marker, or a nonzero wrapped status. Re-running it with identical evidence must produce byte-identical output.
-
-- [ ] **Step 7: Run live Gate 2 twice and verify GREEN**
+- [ ] **Step 5: Run the report check and complete regression suite**
 
 Run:
 
 ```bash
-AIRDCCORE_RUN_GATE2=1 rtk ./tests/gate2_configure_test.sh
-rtk ./scripts/build --configure-only
-rtk git diff --no-index docs/gate2-native-configure-report.md docs/gate2-native-configure-report.md
+AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
+./tests/build_configure_test.sh
+./tests/configure_helpers_test.sh
+./tests/cmake_wrapper_test.sh
+./tests/find_modules_test.sh
+./tests/upstream_config_test.sh
+./tests/update_test.sh
 ```
 
-Expected: Gate 2 prints its exact `PASS:` line; the additional configure is idempotent; the report is unchanged when regenerated. Network is not required after Homebrew prerequisites are installed and Phase 1 source exists.
+Expected: all tests print `PASS`; real configure remains compile-free.
 
-- [ ] **Step 8: Update operator documentation**
+- [ ] **Step 6: Commit Gate 2 evidence and documentation**
 
-Update `README.md` to advertise only `./scripts/build --configure-only`, its optional explicit install flag, and the Gate 2 test. Update `docs/dependencies.md` with the exact discovery-only formula inventory, optional-disabled policy, and the rule that Homebrew paths cannot become publication inputs. Update `docs/build-and-release.md` to mark Gate 2 configure discovery implemented, link `docs/gate2-native-configure-report.md`, and state explicitly that compilation, link closure, `Dist`, and packaging remain pending.
+```bash
+git add docs/reports/2026-09-05-gate-2-native-configure.md README.md \
+  docs/architecture.md docs/dependencies.md docs/build-and-release.md \
+  tests/gate2_configure_test.sh
+git commit -m "docs: record native configure discovery gate"
+```
 
-- [ ] **Step 9: Run final Phase 2 verification**
+---
+
+### Task 7: Final Phase 2 Review and Branch Verification
+
+**Files:**
+- Modify only if review finds a defect: files created or changed in Tasks 1-6
+
+**Interfaces:**
+- Consumes: authoritative spec, all Phase 2 commits, tracked report, ignored raw evidence, and GitFlow branch state.
+- Produces: a clean, reviewable `feature/native-configure-discovery` branch that stops before Phase 3.
+
+- [ ] **Step 1: Review every Phase 2 and Gate 2 requirement against evidence**
+
+Use a checklist mapping each requirement to a file, test, and report section: host inventory; required package installation; unmodified attempt; missing modules; parent variables; package mismatches; C++20; deployment candidates/choice; NAT-PMP/TBB behavior; wrapper preference; Apple Clang rejection; ARM64/Release/static/libc++ policy; output isolation; exact paths; upstream cleanliness; rerun safety; actionable failures; report review; no Phase 3.
+
+Expected: every row has one concrete implementation path, one passing assertion, and one report reference. Fix any uncovered requirement before continuing.
+
+- [ ] **Step 2: Scan for placeholders and interface drift**
 
 Run:
 
 ```bash
-rtk ./tests/upstream_config_test.sh
-rtk ./tests/update_test.sh
-rtk ./tests/native_discovery_test.sh
-rtk ./tests/configure_test.sh
-AIRDCCORE_RUN_GATE2=1 rtk ./tests/gate2_configure_test.sh
-rtk /bin/sh -n scripts/update scripts/build scripts/lib/upstream.sh scripts/lib/native-discovery.sh tests/test_helper.sh tests/upstream_config_test.sh tests/update_test.sh tests/native_discovery_test.sh tests/configure_test.sh tests/gate2_configure_test.sh
-rtk git -C Source/airdcpp-core rev-parse HEAD
-rtk git -C Source/airdcpp-core status --porcelain=v1 --untracked-files=all
-rtk git check-ignore -v Source/airdcpp-core/ Build/airdcpp-core/ Dependencies/ Dist/
-rtk git ls-files Source Dependencies Build Dist
-rtk find Build -type f \( -name '*.o' -o -name '*.a' -o -name '*.dylib' \)
-rtk rg -n '/Users/|/home/|/opt/homebrew' config CMakeLists.txt cmake scripts tests docs/gate2-native-configure-report.md
-rtk git diff --check develop...HEAD
-rtk git status --short --branch
+rg -n 'TBD|TODO|implement later|fill in|appropriate error|similar to' \
+  CMakeLists.txt cmake scripts tests README.md docs
+rg -n 'configure_only|configure-only|AIRDCPP_CORE_SOURCE_DIR|ENABLE_NATPMP|ENABLE_TBB' \
+  CMakeLists.txt cmake scripts tests README.md docs
 ```
 
-Expected:
+Expected: no planning placeholders; all command names, cache variables, flags, helper names, and evidence paths match this plan exactly. Existing upstream prose that legitimately contains one scanned word must be manually classified rather than edited without cause.
 
-- all four offline suites and live Gate 2 print `PASS:`;
-- upstream HEAD is exactly `55d51ceb817ec006d4ec844d9e3788e1b0ccc352`, origin remains canonical, and no unsafe/changed generated content appears;
-- ignored paths match parent policy and no files under `Source`, `Dependencies`, `Build`, or `Dist` are tracked;
-- no object, archive, or dynamic library exists under `Build`;
-- the absolute-path scan returns no tracked machine-local prefix (fixtures may use literal `/Fixture/Homebrew`, never a real prefix);
-- syntax and diff checks exit `0`; and
-- branch is clean on `feature/native-configure-discovery`.
-
-- [ ] **Step 10: Commit Gate 2 evidence and documentation**
-
-Commit only tracked Phase 2 evidence and docs:
-
-```bash
-rtk git add tests/gate2_configure_test.sh scripts/lib/native-discovery.sh docs/gate2-native-configure-report.md README.md docs/dependencies.md docs/build-and-release.md
-rtk git commit -m "test: prove native configure discovery gate"
-```
-
-- [ ] **Step 11: Review without merging or starting Phase 3**
+- [ ] **Step 3: Prove scope boundaries mechanically**
 
 Run:
 
 ```bash
-rtk git log --oneline --decorate develop..HEAD
-rtk git diff --stat develop...HEAD
-rtk git status --short --branch
+rg -n 'cmake[[:space:]]+--build|(^|[[:space:]])ninja([[:space:]]|$)|libtool|(^|/)ar([[:space:]]|$)' scripts tests
+find Build/airdcpp-core/release/upstream -type f \
+  \( -name '*.o' -o -name '*.a' -o -name '*.dylib' \)
+git ls-files Source Dependencies Build Dist
+git status --short --ignored
 ```
 
-Expected: the five planned task commits, plus any separately reviewed evidence-backed adapter/patch commits, on `feature/native-configure-discovery`; a clean tracked worktree with ignored `Source`/`Build` evidence; a reviewed Gate 2 configure report; no merge to `develop`; and no Phase 3 compilation or publication work. Hand the branch to the requested review workflow and create a pull request only after implementation and Gate 2 verification are accepted.
+Expected: production scripts contain no AirDC++ Core build invocation; test occurrences are only explicit fail-fast sentinels; upstream-target artifact search and tracked generated-path search print nothing; ignored output is confined to approved paths. CMake's own compiler/check probes are configure evidence, not Phase 3 output.
+
+- [ ] **Step 4: Run Markdown, link, whitespace, and diff checks**
+
+Run:
+
+```bash
+git diff --check origin/develop...HEAD
+rg -n '\[[^]]+\]\([^)]*\)' README.md docs
+test -f docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md
+test -f docs/reports/2026-09-05-gate-2-native-configure.md
+```
+
+Manually resolve every relative documentation link from its containing directory. Expected: no whitespace errors, broken local links, or references to files outside the locked file map.
+
+- [ ] **Step 5: Run final offline and opt-in verification**
+
+Run:
+
+```bash
+./tests/upstream_config_test.sh
+./tests/update_test.sh
+./tests/configure_helpers_test.sh
+./tests/cmake_wrapper_test.sh
+./tests/find_modules_test.sh
+./tests/build_configure_test.sh
+AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
+```
+
+Expected: every test prints `PASS`; no AirDC++ Core target build or package installation occurs during test execution; the real Gate 2 test performs configure only.
+
+- [ ] **Step 6: Review branch history and make one correction commit only if needed**
+
+Run:
+
+```bash
+git status --short --branch
+git log --oneline --decorate origin/develop..HEAD
+git diff --stat origin/develop...HEAD
+```
+
+Expected logical commits, in order:
+
+```text
+test: define configure discovery prerequisites
+feat: establish ARM64 configure wrapper
+feat: adapt Homebrew configure packages
+feat: add configure-only build orchestration
+test: lock configure-only Gate 2
+docs: record native configure discovery gate
+```
+
+If review fixes were required, commit them as:
+
+```bash
+git add CMakeLists.txt scripts/build scripts/lib/configure.sh \
+  cmake/toolchains/macos-arm64.cmake cmake/modules/AirDCCorePolicy.cmake \
+  cmake/modules/Findminiupnpc.cmake cmake/modules/Findmaxminddb.cmake \
+  tests/test_helper.sh tests/configure_helpers_test.sh tests/cmake_wrapper_test.sh \
+  tests/find_modules_test.sh tests/build_configure_test.sh tests/gate2_configure_test.sh \
+  tests/fixtures/configure-upstream/CMakeLists.txt README.md docs/architecture.md \
+  docs/dependencies.md docs/build-and-release.md \
+  docs/reports/2026-09-05-gate-2-native-configure.md
+git commit -m "fix: close native configure review gaps"
+```
+
+Expected final status: clean `feature/native-configure-discovery`, based on `origin/develop`, with no `master` creation and no Phase 3 artifacts or commits.
