@@ -26,10 +26,13 @@ write_fake xcodebuild \
   'printf "Xcode 26.6\nBuild version 17F113\n"'
 write_fake xcrun \
   'case "$*" in' \
-  '  "clang --version") echo "${FAKE_CLANG_VERSION:-Apple clang version 21.0.0 (clang-2100.1.1.101)}" ;;' \
-  '  "--find clang") echo /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang ;;' \
-  '  "--find clang++") echo /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ ;;' \
-  '  "--sdk macosx --show-sdk-path") echo /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk ;;' \
+  '  "clang --version")' \
+  '    printf "%s\n" "${FAKE_CLANG_VERSION:-Apple clang version 21.0.0 (clang-2100.1.1.101)}" \' \
+  '      "Target: arm64-apple-darwin25.5.0" "Thread model: posix" \' \
+  '      "InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin" ;;' \
+  '  "--find clang") echo "${FAKE_CLANG_PATH:-/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang}" ;;' \
+  '  "--find clang++") echo "${FAKE_CLANGXX_PATH:-/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++}" ;;' \
+  '  "--sdk macosx --show-sdk-path") echo "${FAKE_SDK_PATH:-/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk}" ;;' \
   '  "--sdk macosx --show-sdk-version") echo 26.5 ;;' \
   '  *) exit 64 ;;' \
   'esac'
@@ -38,9 +41,13 @@ write_fake ninja 'echo 1.12.1'
 write_fake python3 'echo "Python 3.14.3"'
 write_fake brew \
   'case "$1:$2" in' \
-  '  --prefix:) echo /opt/homebrew ;;' \
+  '  --prefix:) echo "${FAKE_HOMEBREW_PREFIX:-/opt/homebrew}" ;;' \
   '  --prefix:*)' \
-  '    if [ "${FAKE_DUPLICATE_PREFIXES:-0}" = 1 ] && [ "$2" = zlib ]; then' \
+  '    if [ "${FAKE_PREFIX_FAILURE:-}" = "$2" ]; then' \
+  '      exit 72' \
+  '    elif [ "$2" = boost ] && [ -n "${FAKE_BOOST_PREFIX:-}" ]; then' \
+  '      echo "$FAKE_BOOST_PREFIX"' \
+  '    elif [ "${FAKE_DUPLICATE_PREFIXES:-0}" = 1 ] && [ "$2" = zlib ]; then' \
   '      echo /opt/homebrew/opt/bzip2' \
   '    else' \
   '      echo "/opt/homebrew/opt/$2"' \
@@ -135,6 +142,15 @@ expect_checkout_failure() {
 
 new_checkout_case clean
 validate_configure_checkout "$CASE_PROJECT" "$CASE_CHECKOUT" "$FIXTURE_PIN"
+
+if output=$(
+  checkout_changes() { return 73; }
+  validate_configure_checkout "$CASE_PROJECT" "$CASE_CHECKOUT" "$FIXTURE_PIN" 2>&1
+); then
+  fail "failed checkout inspection unexpectedly succeeded"
+fi
+assert_contains "$output" 'failed to inspect checkout changes' \
+  "failed checkout inspection diagnostic"
 
 new_checkout_case wrong-commit
 expect_checkout_failure wrong_commit 'checkout HEAD does not match configured commit' \
@@ -236,6 +252,8 @@ assert_line "$WORK/inventory.txt" 'generated.airdcpp/core/version.inc=present' \
   "generated version inventory"
 assert_line "$WORK/inventory.txt" 'generated.airdcpp/core/localization/StringDefs.cpp=present' \
   "generated strings inventory"
+unkeyed_inventory_lines=$(sed -n '/^[^=][^=]*=/!p' "$WORK/inventory.txt")
+assert_eq "$unkeyed_inventory_lines" '' "every inventory line is keyed"
 assert_eq "$inventory" "$(printf '%s\n' "$inventory" | LC_ALL=C sort)" "sorted inventory"
 assert_not_contains "$inventory" "$WORK" "inventory temp-path leakage"
 assert_not_contains "$inventory" '/Users/' "home directory omitted"
@@ -250,6 +268,39 @@ assert_eq "$(cat "$CASE_CHECKOUT/airdcpp/core/localization/StringDefs.cpp")" "$s
   "inventory preserved generated strings contents"
 assert_eq "$(stat -f '%m' "$CASE_CHECKOUT/airdcpp/core/localization/StringDefs.cpp")" "$strings_mtime" \
   "inventory preserved generated strings mtime"
+
+expect_inventory_path_rejection() {
+  label=$1
+  variable=$2
+  sensitive_path=$3
+  rejected_output=$CASE_PROJECT/Build/airdcpp-core/rejected-$label.txt
+  if output=$(env "$variable=$sensitive_path" PROJECT_ROOT="$CASE_PROJECT" PATH="$FAKE_BIN:$PATH" \
+    sh -c '. "$1"; write_host_inventory "$2"' sh \
+    "$ROOT/scripts/lib/configure.sh" "$rejected_output" 2>&1); then
+    fail "$label inventory path unexpectedly succeeded"
+  fi
+  assert_contains "$output" "inventory path is prohibited for" "$label prohibited-path diagnostic"
+  assert_not_contains "$output" "$sensitive_path" "$label sensitive-path diagnostic"
+  assert_file_absent "$rejected_output"
+}
+
+expect_inventory_path_rejection clang-home FAKE_CLANG_PATH /Users/review-private/clang
+expect_inventory_path_rejection clangxx-temp FAKE_CLANGXX_PATH "$WORK/compiler/clang++"
+expect_inventory_path_rejection sdk-home FAKE_SDK_PATH /Users/review-private/MacOSX.sdk
+expect_inventory_path_rejection homebrew-temp FAKE_HOMEBREW_PREFIX "$WORK/homebrew"
+expect_inventory_path_rejection formula-home FAKE_BOOST_PREFIX /Users/review-private/boost
+
+prefix_failure_output=$CASE_PROJECT/Build/airdcpp-core/prefix-failure.txt
+if output=$(FAKE_PREFIX_FAILURE=boost PROJECT_ROOT=$CASE_PROJECT PATH="$FAKE_BIN:$PATH" \
+  write_host_inventory "$prefix_failure_output" 2>&1); then
+  fail "failed formula-prefix inventory unexpectedly succeeded"
+fi
+assert_contains "$output" 'Homebrew prefix unavailable for boost' \
+  "failed formula-prefix diagnostic"
+assert_file_absent "$prefix_failure_output"
+prefix_failure_temps=$(find "$CASE_PROJECT/Build/airdcpp-core" -maxdepth 1 \
+  \( -name 'prefix-failure.txt.raw.*' -o -name 'prefix-failure.txt.sorted.*' \) -print)
+assert_eq "$prefix_failure_temps" '' "failed formula-prefix inventory temporary cleanup"
 
 OUTSIDE_DIR=$CASE_PROJECT/outside
 if output=$(PROJECT_ROOT=$CASE_PROJECT PATH="$FAKE_BIN:$PATH" \

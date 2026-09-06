@@ -20,8 +20,9 @@ missing_required_formulae() {
 assert_supported_host() {
   [ "$(uname -s)" = Darwin ] || configure_die "macOS is required"
   [ "$(uname -m)" = arm64 ] || configure_die "arm64 host is required"
-  clang_version=$(xcrun clang --version 2>/dev/null) ||
+  clang_output=$(xcrun clang --version 2>/dev/null) ||
     configure_die "xcrun Apple Clang is unavailable"
+  clang_version=$(printf '%s\n' "$clang_output" | sed -n '1p')
   case "$clang_version" in
     Apple\ clang\ version*) ;;
     *) configure_die "xcrun did not resolve Apple Clang" ;;
@@ -52,7 +53,8 @@ validate_configure_checkout() {
   [ "$checkout_origins" = "$AIRDCPP_CORE_URL" ] ||
     configure_die "origin URL does not match configured upstream"
 
-  unsafe_changes=$(checkout_changes "$checkout")
+  unsafe_changes=$(checkout_changes "$checkout") ||
+    configure_die "failed to inspect checkout changes"
   [ -z "$unsafe_changes" ] ||
     configure_die "checkout has unsafe local changes:\n$unsafe_changes"
 }
@@ -143,6 +145,31 @@ prepare_inventory_output() {
   [ ! -d "$requested_output" ] || configure_die "inventory output is a directory"
 }
 
+inventory_path_is_prohibited() {
+  inventory_candidate=$1
+  for inventory_boundary in /Users /tmp /private/tmp /var/folders /private/var/folders \
+    "${HOME:-}" "${TMPDIR:-}"; do
+    inventory_boundary=${inventory_boundary%/}
+    [ -n "$inventory_boundary" ] && [ "$inventory_boundary" != / ] || continue
+    case "$inventory_candidate" in
+      "$inventory_boundary"|"$inventory_boundary"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+validate_inventory_path_value() {
+  inventory_key=$1
+  inventory_value=$2
+  case "$inventory_value" in
+    /*) ;;
+    *) configure_die "inventory path is not absolute for $inventory_key" ;;
+  esac
+  if inventory_path_is_prohibited "$inventory_value"; then
+    configure_die "inventory path is prohibited for $inventory_key"
+  fi
+}
+
 write_host_inventory() {
   output=$1
   prepare_inventory_output "$output"
@@ -158,6 +185,7 @@ write_host_inventory() {
   xcode_version=$(printf '%s\n' "$xcode_output" | sed -n 's/^Xcode //p')
   xcode_build=$(printf '%s\n' "$xcode_output" | sed -n 's/^Build version //p')
   clang_output=$(xcrun clang --version) || configure_die "Apple Clang version probe failed"
+  clang_version=$(printf '%s\n' "$clang_output" | sed -n '1p')
   clang_path=$(xcrun --find clang) || configure_die "Apple Clang path probe failed"
   clangxx_path=$(xcrun --find clang++) || configure_die "Apple Clang++ path probe failed"
   sdk_path=$(xcrun --sdk macosx --show-sdk-path) || configure_die "macOS SDK path probe failed"
@@ -177,6 +205,48 @@ write_host_inventory() {
 *}
   ninja_version=$(ninja --version) || configure_die "Ninja version probe failed"
 
+  validate_inventory_path_value clang.path "$clang_path"
+  validate_inventory_path_value clangxx.path "$clangxx_path"
+  validate_inventory_path_value sdk.path "$sdk_path"
+  validate_inventory_path_value homebrew.prefix "$homebrew_prefix"
+
+  formula_inventory=$(
+    for formula in $(required_formulae); do
+      if formula_output=$(HOMEBREW_NO_AUTO_UPDATE=1 brew list --versions "$formula" 2>/dev/null); then
+        formula_version=${formula_output#"$formula "}
+      else
+        formula_version=absent
+      fi
+      formula_prefix=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix "$formula" 2>/dev/null) ||
+        configure_die "Homebrew prefix unavailable for $formula"
+      validate_inventory_path_value "formula.$formula.prefix" "$formula_prefix"
+      printf 'formula.%s=%s\n' "$formula" "$formula_version"
+      printf 'formula.%s.prefix=%s\n' "$formula" "$formula_prefix"
+    done
+  ) || return 1
+
+  optional_inventory=$(
+    for optional_formula in libnatpmp tbb; do
+      if optional_output=$(HOMEBREW_NO_AUTO_UPDATE=1 brew list --versions "$optional_formula" 2>/dev/null); then
+        optional_version=${optional_output#"$optional_formula "}
+      else
+        optional_version=absent
+      fi
+      printf 'optional.%s=%s\n' "$optional_formula" "$optional_version"
+    done
+  )
+
+  generated_inventory=$(
+    for generated_path in airdcpp/core/version.inc airdcpp/core/localization/StringDefs.cpp; do
+      if [ -e "$inventory_project_root/Source/airdcpp-core/$generated_path" ]; then
+        generated_state=present
+      else
+        generated_state=absent
+      fi
+      printf 'generated.%s=%s\n' "$generated_path" "$generated_state"
+    done
+  )
+
   inventory_raw=$(mktemp "$output.raw.XXXXXX") || configure_die "failed to create inventory temporary file"
   inventory_sorted=$(mktemp "$output.sorted.XXXXXX") || {
     rm -f "$inventory_raw"
@@ -190,7 +260,7 @@ write_host_inventory() {
     printf 'host.arch=%s\n' "$host_arch"
     printf 'xcode.version=%s\n' "$xcode_version"
     printf 'xcode.build=%s\n' "$xcode_build"
-    printf 'clang.version=%s\n' "$clang_output"
+    printf 'clang.version=%s\n' "$clang_version"
     printf 'clang.path=%s\n' "$clang_path"
     printf 'clangxx.path=%s\n' "$clangxx_path"
     printf 'sdk.path=%s\n' "$sdk_path"
@@ -201,33 +271,9 @@ write_host_inventory() {
     printf 'homebrew.version=%s\n' "$homebrew_version"
     printf 'cmake.version=%s\n' "$cmake_version"
     printf 'ninja.version=%s\n' "$ninja_version"
-    for formula in $(required_formulae); do
-      if formula_output=$(HOMEBREW_NO_AUTO_UPDATE=1 brew list --versions "$formula" 2>/dev/null); then
-        formula_version=${formula_output#"$formula "}
-      else
-        formula_version=absent
-      fi
-      formula_prefix=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix "$formula" 2>/dev/null) ||
-        configure_die "Homebrew prefix unavailable for $formula"
-      printf 'formula.%s=%s\n' "$formula" "$formula_version"
-      printf 'formula.%s.prefix=%s\n' "$formula" "$formula_prefix"
-    done
-    for optional_formula in libnatpmp tbb; do
-      if optional_output=$(HOMEBREW_NO_AUTO_UPDATE=1 brew list --versions "$optional_formula" 2>/dev/null); then
-        optional_version=${optional_output#"$optional_formula "}
-      else
-        optional_version=absent
-      fi
-      printf 'optional.%s=%s\n' "$optional_formula" "$optional_version"
-    done
-    for generated_path in airdcpp/core/version.inc airdcpp/core/localization/StringDefs.cpp; do
-      if [ -e "$inventory_project_root/Source/airdcpp-core/$generated_path" ]; then
-        generated_state=present
-      else
-        generated_state=absent
-      fi
-      printf 'generated.%s=%s\n' "$generated_path" "$generated_state"
-    done
+    printf '%s\n' "$formula_inventory"
+    printf '%s\n' "$optional_inventory"
+    printf '%s\n' "$generated_inventory"
   } > "$inventory_raw"; then
     rm -f "$inventory_raw" "$inventory_sorted"
     configure_die "failed to collect host inventory"
