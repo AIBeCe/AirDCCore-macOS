@@ -48,4 +48,19 @@ function(airdcpp_record_target target output)
     "target.imported_configurations=${target_imported_configurations}\n"
     "target.include_directories=${target_include_directories}\n"
     "target.interface_libraries=${target_interface_libraries}\n")
+
+  # Many package configs specify only configuration-specific library locations.
+  set(recorded_configurations "${target_imported_configurations}")
+  list(REMOVE_DUPLICATES recorded_configurations)
+  list(SORT recorded_configurations)
+  foreach(configuration IN LISTS recorded_configurations)
+    string(TOUPPER "${configuration}" configuration)
+    get_target_property(configuration_location "${target}"
+      "IMPORTED_LOCATION_${configuration}")
+    if("${configuration_location}" MATCHES "-NOTFOUND$")
+      set(configuration_location "")
+    endif()
+    file(APPEND "${output}"
+      "target.imported_location.${configuration}=${configuration_location}\n")
+  endforeach()
 endfunction()

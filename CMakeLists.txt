@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 project(AirDCCoreMacOS LANGUAGES C CXX)
 
+# Narrow miniupnpc/maxminddb adapters cover formulae without CMake configs.
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 include(AirDCCorePolicy)
 airdcpp_require_apple_clang()

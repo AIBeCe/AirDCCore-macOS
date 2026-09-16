@@ -66,10 +66,11 @@ package_record=$(awk '
 expected_package_record='target.name=BZip2::BZip2
 target.exists=TRUE
 target.type=STATIC_LIBRARY
-target.imported_location=/fixture/lib/libbz2.a
+target.imported_location=
 target.imported_configurations=RELEASE
 target.include_directories=/fixture/include
-target.interface_libraries=fixture_dependency'
+target.interface_libraries=fixture_dependency
+target.imported_location.RELEASE=/fixture/lib/libbz2-release.a'
 assert_eq "$package_record" "$expected_package_record" \
   "child package imported target properties"
 

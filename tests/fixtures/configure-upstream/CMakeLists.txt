@@ -42,7 +42,7 @@ fixture_require_value(ENABLE_TBB "${ENABLE_TBB}" "${FIXTURE_EXPECTED_TBB}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/packages/BZip2Config.cmake" [=[
 add_library(BZip2::BZip2 STATIC IMPORTED)
 set_target_properties(BZip2::BZip2 PROPERTIES
-  IMPORTED_LOCATION /fixture/lib/libbz2.a
+  IMPORTED_LOCATION_RELEASE /fixture/lib/libbz2-release.a
   IMPORTED_CONFIGURATIONS RELEASE
   INTERFACE_INCLUDE_DIRECTORIES /fixture/include
   INTERFACE_LINK_LIBRARIES fixture_dependency)
