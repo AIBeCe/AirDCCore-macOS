@@ -35,6 +35,8 @@ set(GLOBAL_CONFIG_DIRECTORY "Library/Application Support/AirDC++" CACHE STRING "
 set(PROJECT_NAME_GLOBAL AirDCCore CACHE STRING "Parent project name")
 set(AIRDCPP_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/airdcpp-core" CACHE PATH "Pinned source checkout")
 
+# The parent summary must see imports discovered by upstream find_package calls.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 add_subdirectory("${AIRDCPP_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/upstream")
 
 set(AIRDCPP_CONFIGURE_SUMMARY "${CMAKE_BINARY_DIR}/airdcpp-configure-summary.txt")

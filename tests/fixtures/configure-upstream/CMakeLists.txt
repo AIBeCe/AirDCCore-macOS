@@ -38,4 +38,16 @@ fixture_require_value(
 fixture_require_value(ENABLE_NATPMP "${ENABLE_NATPMP}" "${FIXTURE_EXPECTED_NATPMP}")
 fixture_require_value(ENABLE_TBB "${ENABLE_TBB}" "${FIXTURE_EXPECTED_TBB}")
 
+# Exercise child-directory package discovery without a manually GLOBAL import.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/packages/BZip2Config.cmake" [=[
+add_library(BZip2::BZip2 STATIC IMPORTED)
+set_target_properties(BZip2::BZip2 PROPERTIES
+  IMPORTED_LOCATION /fixture/lib/libbz2.a
+  IMPORTED_CONFIGURATIONS RELEASE
+  INTERFACE_INCLUDE_DIRECTORIES /fixture/include
+  INTERFACE_LINK_LIBRARIES fixture_dependency)
+]=])
+find_package(BZip2 REQUIRED CONFIG
+  PATHS "${CMAKE_CURRENT_BINARY_DIR}/packages" NO_DEFAULT_PATH)
+
 add_library(airdcpp INTERFACE)

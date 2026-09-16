@@ -58,6 +58,21 @@ Iconv::Iconv'
 recorded_targets=$(sed -n 's/^target.name=//p' "$SUMMARY")
 assert_eq "$recorded_targets" "$expected_targets" "imported target record order"
 
+package_record=$(awk '
+  $0 == "target.name=BZip2::BZip2" { recording=1; print; next }
+  recording && /^target.name=/ { exit }
+  recording { print }
+' "$SUMMARY")
+expected_package_record='target.name=BZip2::BZip2
+target.exists=TRUE
+target.type=STATIC_LIBRARY
+target.imported_location=/fixture/lib/libbz2.a
+target.imported_configurations=RELEASE
+target.include_directories=/fixture/include
+target.interface_libraries=fixture_dependency'
+assert_eq "$package_record" "$expected_package_record" \
+  "child package imported target properties"
+
 configure_failure wrong-mode "CMAKE_BUILD_TYPE must be Release; got Debug" \
   -DCMAKE_BUILD_TYPE=Debug
 configure_failure wrong-architecture \
