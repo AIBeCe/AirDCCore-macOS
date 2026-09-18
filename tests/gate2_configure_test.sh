@@ -34,6 +34,7 @@ done <<'EOF'
 EOF
 assert_contains "$(cat "$REPORT")" "Dist is absent" "report publication absence"
 assert_contains "$(cat "$REPORT")" "libairdcpp.a is absent" "report Core archive absence"
+validate_report_claims() {
 awk '
   /^## / { section = $0 }
   {
@@ -42,17 +43,46 @@ awk '
     if ($0 ~ /ENABLE_(NATPMP|TBB)=ON/ &&
         section != "## Unmodified upstream configure" &&
         section != "## Optional NAT-PMP and TBB behavior") bad = "optional ON outside discovery/probe sections"
-    negative = lower ~ /(^|[^a-z])(no|not|never|absent|without|unproven|outside)([^a-z]|$)/
-    if (!negative && lower ~ /(dist|libairdcpp[.]a)/ &&
-        lower ~ /(produc|creat|built|build succeeded|generat|publish)/) bad = "publication/archive production claim"
-    if (!negative && lower ~ /(airdc[+][+] core|airdcpp core|core)/ &&
-        lower ~ /(compil(e|es|ed|ation|ing).*(success|succeed|pass)|success.*compil(e|es|ed|ation|ing))/) bad = "Core compile-success claim"
-    excluded = lower ~ /(websocket[+][+]|websocketpp|nlohmann[- ]json|npm|boost([ :.]|::)*system)/
+    # Remove only directly negated predicates/subjects, never an entire line.
+    # "No errors" cannot hide a later affirmative claim; nor can a negative
+    # compile claim hide an affirmative archive/publication claim (or vice versa).
+    claims = lower
+    gsub(/(^|[^a-z])(not|never|without|no)[[:space:]]+(produc[a-z]*|creat[a-z]*|built|generat[a-z]*|publish[a-z]*|compil[a-z]*|success[a-z]*|succeed[a-z]*|pass[a-z]*|resolv[a-z]*|found|imported)/, "", claims)
+    gsub(/(^|[^a-z])(no|without)[[:space:]]+((airdc[+][+] core|airdcpp core|core)[[:space:]]+)?compil[a-z]*/, "", claims)
+    gsub(/(^|[^a-z])no[[:space:]]+(dist|libairdcpp[.]a)[[:space:]]+((was|is|were)[[:space:]]+)?(produc[a-z]*|creat[a-z]*|built|generat[a-z]*|publish[a-z]*)/, "", claims)
+    if (claims ~ /(dist|libairdcpp[.]a)/ &&
+        claims ~ /(produc|creat|built|build succeeded|generat|publish)/) bad = "publication/archive production claim"
+    if (claims ~ /(airdc[+][+] core|airdcpp core|core)/ &&
+        claims ~ /(compil(e|es|ed|ation|ing).*(success|succeed|pass)|success.*compil(e|es|ed|ation|ing))/) bad = "Core compile-success claim"
+    excluded = claims ~ /(websocket[+][+]|websocketpp|nlohmann[- ]json|npm|boost([ :.]|::)*system)/
     if (excluded && (section == "## Package resolution" ||
-        (!negative && lower ~ /(resolv|found|imported)/))) bad = "unsupported package resolution claim"
+        claims ~ /(resolv|found|imported)/)) bad = "unsupported package resolution claim"
     if (bad) { printf "FAIL: Gate 2 report line %d: %s\n", NR, bad > "/dev/stderr"; exit 1 }
   }
-' "$REPORT" || fail "Gate 2 report contract"
+' "$1"
+}
+
+# Exercise the real validator: negating errors must not negate a positive
+# compile, publication, archive, or package-resolution claim on the same line.
+for claim in \
+  'No errors: AirDC++ Core compiled successfully and Dist was produced.' \
+  'No errors: AirDC++ Core compiled successfully.' \
+  'No errors: Dist was produced.' \
+  'No errors: libairdcpp.a was produced.' \
+  'AirDC++ Core did not compile successfully, but Dist was produced.' \
+  'Dist was not produced, but AirDC++ Core compiled successfully.' \
+  'No errors: WebSocket++ resolved successfully.'; do
+  if printf '%s\n' "$claim" | validate_report_claims /dev/stdin >/dev/null 2>&1; then
+    fail "report validator accepted unrelated negation: $claim"
+  fi
+done
+printf '%s\n' \
+  'Dist was not produced. libairdcpp.a was never produced.' \
+  'AirDC++ Core did not compile successfully.' \
+  'No AirDC++ Core compilation succeeded. No libairdcpp.a was produced.' \
+  'WebSocket++ was not resolved.' | validate_report_claims /dev/stdin ||
+  fail "report validator rejected claim-local negation"
+validate_report_claims "$REPORT" || fail "Gate 2 report contract"
 
 . "$ROOT/scripts/lib/configure.sh"
 CHECKOUT=$ROOT/Source/airdcpp-core
