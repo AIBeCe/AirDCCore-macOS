@@ -22,8 +22,10 @@ mkdir -p "$PROJECT_ROOT/Build"
 [ ! -L "$BUILD_ROOT" ] || configure_die 'refusing symlinked Build/airdcpp-core'
 [ ! -e "$BUILD_ROOT" ] || [ -d "$BUILD_ROOT" ] || configure_die 'Build/airdcpp-core is not a directory'
 prepare_inventory_output "$BUILD_ROOT/evidence/host-inventory.txt"
-before_parent_status=$(configure_tree_snapshot "$PROJECT_ROOT")
-before_upstream_state=$(configure_upstream_snapshot "$CHECKOUT")
+before_parent_status=$(configure_tree_snapshot "$PROJECT_ROOT") ||
+  configure_die 'failed to capture initial parent scope snapshot; inspect filesystem access before retrying'
+before_upstream_state=$(configure_upstream_snapshot "$CHECKOUT") ||
+  configure_die 'failed to capture initial upstream scope snapshot; inspect checkout access before retrying'
 cmake_prefix_path=$(dependency_cmake_prefix_path)
 pkg_config_path=$(dependency_pkg_config_path)
 prepare_unmodified_reuse_metadata "$PROJECT_ROOT"

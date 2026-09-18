@@ -10,26 +10,36 @@ configure_die() {
 configure_tree_snapshot() (
   cd "$1" || exit 1
   git status --porcelain=v1 --untracked-files=all || exit 1
-  find . -name .git -prune -o -path ./Build/airdcpp-core -prune -o \
-    -path ./Source/airdcpp-core -prune -o -print | LC_ALL=C sort |
-    while IFS= read -r scope_path; do
+  scope_paths=$(find . -name .git -prune -o -path ./Build/airdcpp-core -prune -o \
+    -path ./Source/airdcpp-core -prune -o -print) || exit 1
+  scope_paths=$(printf '%s\n' "$scope_paths" | LC_ALL=C sort) || exit 1
+  while IFS= read -r scope_path; do
       if [ -L "$scope_path" ]; then
-        printf 'link %s %s\n' "$scope_path" "$(readlink "$scope_path")"
+        scope_link=$(readlink "$scope_path") || exit 1
+        printf 'link %s %s\n' "$scope_path" "$scope_link" || exit 1
       elif [ -f "$scope_path" ]; then
-        printf 'file %s %s %s\n' "$scope_path" \
-          "$(stat -f '%m:%z:%p' "$scope_path")" "$(shasum -a 256 "$scope_path" | cut -d ' ' -f1)"
+        scope_metadata=$(stat -f '%m:%z:%p' "$scope_path") || exit 1
+        scope_hash=$(shasum -a 256 "$scope_path") || exit 1
+        printf 'file %s %s %s\n' "$scope_path" "$scope_metadata" "${scope_hash%% *}" || exit 1
       else
-        printf 'path %s\n' "$scope_path"
+        [ -e "$scope_path" ] || exit 1
+        printf 'path %s\n' "$scope_path" || exit 1
       fi
-    done
+  done <<EOF
+$scope_paths
+EOF
 )
 
-configure_fingerprint() {
-  if [ -L "$1" ]; then printf 'symlink:%s\n' "$(readlink "$1")"
-  elif [ -f "$1" ]; then shasum -a 256 "$1" | cut -d ' ' -f1
+configure_fingerprint() (
+  if [ -L "$1" ]; then
+    fingerprint_link=$(readlink "$1") || exit 1
+    printf 'symlink:%s\n' "$fingerprint_link"
+  elif [ -f "$1" ]; then
+    fingerprint_hash=$(shasum -a 256 "$1") || exit 1
+    printf '%s\n' "${fingerprint_hash%% *}"
   elif [ -e "$1" ]; then printf 'non-file\n'
   else printf 'absent\n'; fi
-}
+)
 
 configure_upstream_snapshot() (
   git -C "$1" rev-parse HEAD || exit 1
@@ -38,14 +48,18 @@ configure_upstream_snapshot() (
   git -C "$1" ls-files --others --ignored --exclude-standard || exit 1
   git -C "$1" diff --binary HEAD || exit 1
   for generated in airdcpp/core/version.inc airdcpp/core/localization/StringDefs.cpp; do
-    printf '%s=%s\n' "$generated" "$(configure_fingerprint "$1/$generated")"
+    generated_fingerprint=$(configure_fingerprint "$1/$generated") || exit 1
+    printf '%s=%s\n' "$generated" "$generated_fingerprint" || exit 1
     [ ! -e "$1/$generated" ] || stat -f '%m:%z:%p' "$1/$generated" || exit 1
   done
 )
 
 assert_configure_scope() (
-  [ "$(configure_tree_snapshot "$1")" = "$2" ] &&
-    [ "$(configure_upstream_snapshot "$1/Source/airdcpp-core")" = "$3" ] ||
+  current_parent_scope=$(configure_tree_snapshot "$1") ||
+    configure_die 'failed to capture final parent scope snapshot; inspect filesystem access before retrying'
+  current_upstream_scope=$(configure_upstream_snapshot "$1/Source/airdcpp-core") ||
+    configure_die 'failed to capture final upstream scope snapshot; inspect checkout access before retrying'
+  [ "$current_parent_scope" = "$2" ] && [ "$current_upstream_scope" = "$3" ] ||
     configure_die "configure scope changed outside Build/airdcpp-core; inspect and restore the unexpected changes before retrying"
 )
 

@@ -6,6 +6,8 @@ WORK=$(new_temp_dir)
 trap 'rm -rf -- "$WORK"' 0 1 2 15
 FAKE_BIN=$WORK/bin
 mkdir -p "$FAKE_BIN"
+REAL_FIND=$(command -v find)
+export REAL_FIND
 write_fake() { tool=$1; shift; printf '%s\n' '#!/bin/sh' "$@" > "$FAKE_BIN/$tool"; chmod +x "$FAKE_BIN/$tool"; }
 write_fake uname 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac'
 write_fake sw_vers 'printf "ProductName:\tmacOS\nProductVersion:\t26.5.1\nBuildVersion:\t25F80\n"'
@@ -17,6 +19,11 @@ write_fake xcrun 'case "$*" in' \
  '"--sdk macosx --show-sdk-path") echo /Applications/Xcode.app/MacOSX.sdk ;;' \
  '"--sdk macosx --show-sdk-version") echo 26.5 ;; *) exit 64 ;; esac'
 write_fake python3 'echo "Python 3.14.3"'
+write_fake find 'if [ "${1:-}" = . ]; then' \
+ ' case "${FAIL_SNAPSHOT_SCAN:-}" in' \
+ ' initial) printf "./CMakeLists.txt\n"; exit 71 ;;' \
+ ' final) if grep -q -- --fresh "$FAKE_CMAKE_CALLS" 2>/dev/null; then printf "./CMakeLists.txt\n"; exit 71; fi ;;' \
+ ' esac; fi' 'exec "$REAL_FIND" "$@"'
 write_fake brew 'case "$1:${2:-}" in' \
  '--prefix:) echo /opt/homebrew ;; --prefix:*) echo /opt/homebrew/opt/$2 ;;' \
  '--version:) echo "Homebrew 6.0.14" ;;' \
@@ -81,6 +88,55 @@ expect_failure() {
  assert_contains "$output" "$expected" "$expected diagnostic"
 }
 new_case success
+# Failed external probes must fail the real snapshot even when they emit
+# plausible partial output, including when called under an if/|| context.
+snapshot_failures=0
+for probe in find sort stat shasum readlink; do
+ ln -sf config/upstream.env "$CASE_ROOT/snapshot-link"
+ if output=$(PROBE=$probe sh -c '
+   . "$1"
+   case "$PROBE" in
+     find) find() { printf "./CMakeLists.txt\n"; return 71; } ;;
+     sort) sort() { printf "./CMakeLists.txt\n"; return 72; } ;;
+     stat) stat() { printf "1:1:1\n"; return 73; } ;;
+     shasum) shasum() { printf "bad  file\n"; return 74; } ;;
+     readlink) readlink() { printf "partial\n"; return 75; } ;;
+   esac
+   configure_tree_snapshot "$2"
+ ' sh "$ROOT/scripts/lib/configure.sh" "$CASE_ROOT" 2>&1); then
+   printf 'FAIL: snapshot accepted failed %s probe\n' "$probe" >&2
+   snapshot_failures=$((snapshot_failures + 1))
+ fi
+done
+rm "$CASE_ROOT/snapshot-link"
+mkdir -p "$CASE_ROOT/Source/airdcpp-core/airdcpp/core"
+printf generated > "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+for probe in stat shasum; do
+ if output=$(PROBE=$probe sh -c '
+   . "$1"
+   case "$PROBE" in
+     stat) stat() { printf "1:1:1\n"; return 73; } ;;
+     shasum) shasum() { printf "bad  file\n"; return 74; } ;;
+   esac
+   configure_upstream_snapshot "$2"
+ ' sh "$ROOT/scripts/lib/configure.sh" "$CASE_ROOT/Source/airdcpp-core" 2>&1); then
+   printf 'FAIL: upstream snapshot accepted failed %s probe\n' "$probe" >&2
+   snapshot_failures=$((snapshot_failures + 1))
+ fi
+done
+rm "$CASE_ROOT/Source/airdcpp-core/airdcpp/core/version.inc"
+for phase in parent upstream; do
+ if output=$(PHASE=$phase sh -c '
+   . "$1"
+   configure_tree_snapshot() { printf parent; [ "$PHASE" != parent ]; }
+   configure_upstream_snapshot() { printf upstream; [ "$PHASE" != upstream ]; }
+   assert_configure_scope "$2" parent upstream
+ ' sh "$ROOT/scripts/lib/configure.sh" "$CASE_ROOT" 2>&1); then
+   printf 'FAIL: scope accepted failed %s snapshot\n' "$phase" >&2
+   snapshot_failures=$((snapshot_failures + 1))
+ fi
+done
+[ "$snapshot_failures" -eq 0 ] || fail "$snapshot_failures unverifiable snapshot checks succeeded"
 expect_failure 'usage: scripts/build --configure-only' "$CASE_ROOT/scripts/build"
 expect_failure 'Phase 2 supports only --configure-only' "$CASE_ROOT/scripts/build" --compile
 output=$(run_case)
@@ -181,4 +237,10 @@ printf external > "$WORK/external-cache"
 ln -s "$WORK/external-cache" "$CASE_ROOT/Build/airdcpp-core/release/CMakeCache.txt"
 expect_failure 'refusing symlinked wrapper output' run_case
 assert_eq "$(cat "$WORK/external-cache")" external 'external symlink target preserved'
+for phase in initial final; do
+ new_case snapshot-$phase
+ FAIL_SNAPSHOT_SCAN=$phase; export FAIL_SNAPSHOT_SCAN
+ expect_failure "failed to capture $phase parent scope snapshot" run_case
+ unset FAIL_SNAPSHOT_SCAN
+done
 printf 'PASS: configure-only build orchestration\n'
