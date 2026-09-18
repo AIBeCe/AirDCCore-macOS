@@ -5,6 +5,186 @@ configure_die() {
   exit 1
 }
 
+# Scope snapshots deliberately include ignored paths and contents, not merely
+# porcelain status (which cannot see generated files or edits to dirty files).
+configure_tree_snapshot() (
+  cd "$1" || exit 1
+  git status --porcelain=v1 --untracked-files=all || exit 1
+  find . -name .git -prune -o -path ./Build/airdcpp-core -prune -o \
+    -path ./Source/airdcpp-core -prune -o -print | LC_ALL=C sort |
+    while IFS= read -r scope_path; do
+      if [ -L "$scope_path" ]; then
+        printf 'link %s %s\n' "$scope_path" "$(readlink "$scope_path")"
+      elif [ -f "$scope_path" ]; then
+        printf 'file %s %s %s\n' "$scope_path" \
+          "$(stat -f '%m:%z:%p' "$scope_path")" "$(shasum -a 256 "$scope_path" | cut -d ' ' -f1)"
+      else
+        printf 'path %s\n' "$scope_path"
+      fi
+    done
+)
+
+configure_fingerprint() {
+  if [ -L "$1" ]; then printf 'symlink:%s\n' "$(readlink "$1")"
+  elif [ -f "$1" ]; then shasum -a 256 "$1" | cut -d ' ' -f1
+  elif [ -e "$1" ]; then printf 'non-file\n'
+  else printf 'absent\n'; fi
+}
+
+configure_upstream_snapshot() (
+  git -C "$1" rev-parse HEAD || exit 1
+  git -C "$1" remote get-url --all origin || exit 1
+  git -C "$1" status --porcelain=v1 --untracked-files=all || exit 1
+  git -C "$1" ls-files --others --ignored --exclude-standard || exit 1
+  git -C "$1" diff --binary HEAD || exit 1
+  for generated in airdcpp/core/version.inc airdcpp/core/localization/StringDefs.cpp; do
+    printf '%s=%s\n' "$generated" "$(configure_fingerprint "$1/$generated")"
+    [ ! -e "$1/$generated" ] || stat -f '%m:%z:%p' "$1/$generated" || exit 1
+  done
+)
+
+assert_configure_scope() (
+  [ "$(configure_tree_snapshot "$1")" = "$2" ] &&
+    [ "$(configure_upstream_snapshot "$1/Source/airdcpp-core")" = "$3" ] ||
+    configure_die "configure scope changed outside Build/airdcpp-core; inspect and restore the unexpected changes before retrying"
+)
+
+configure_recapture_required() {
+  configure_die "archive or remove Build/airdcpp-core/unmodified before recapturing changed inputs"
+}
+
+configure_original_inputs() (
+  printf 'upstream.commit=%s\n' "$(git -C "$1" rev-parse HEAD)"
+  printf 'upstream.cmakelists.sha256=%s\n' "$(configure_fingerprint "$1/CMakeLists.txt")"
+  printf 'upstream.pre_status=clean\nupstream.post_status=clean\n'
+  for generated in airdcpp/core/version.inc airdcpp/core/localization/StringDefs.cpp; do
+    fingerprint=$(configure_fingerprint "$1/$generated")
+    printf 'generated.%s.pre=%s\ngenerated.%s.post=%s\n' "$generated" "$fingerprint" "$generated" "$fingerprint"
+  done
+)
+
+configure_reuse_inputs() (
+  configure_original_inputs "$1"
+  printf 'cmake.version=%s\n' "$(sed -n 's/^cmake.version=//p' "$2")"
+  printf 'formula.inventory.sha256=%s\n' "$(sed -n '/^formula\./p' "$2" | shasum -a 256 | cut -d ' ' -f1)"
+  printf 'architecture=arm64\ndeployment_target=14.0\n'
+)
+
+# Task2 captured a narrower schema. Never add fields to that historical file:
+# derive a one-time sidecar from its cache and the still-preserved inventory.
+prepare_unmodified_reuse_metadata() (
+  root=$1
+  capture=$root/Build/airdcpp-core/unmodified
+  inventory=$root/Build/airdcpp-core/evidence/host-inventory.txt
+  sidecar=$root/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt
+  [ -e "$capture" ] || return 0
+  [ -d "$capture" ] && [ ! -L "$capture" ] || configure_recapture_required
+  for field in command.txt inputs.txt exit-code.txt configure.log; do
+    [ -f "$capture/$field" ] && [ ! -L "$capture/$field" ] || configure_recapture_required
+  done
+  grep -Eq '^[0-9]+$' "$capture/exit-code.txt" || configure_recapture_required
+  grep -q '^cmake.version=' "$capture/inputs.txt" && return 0
+  [ "$(cat "$capture/inputs.txt")" = "$(configure_original_inputs "$root/Source/airdcpp-core")" ] || configure_recapture_required
+  if [ -e "$sidecar" ]; then
+    [ -f "$sidecar" ] && [ ! -L "$sidecar" ] || configure_recapture_required
+    return 0
+  fi
+  [ -f "$inventory" ] && [ ! -L "$inventory" ] && [ -f "$capture/CMakeCache.txt" ] &&
+    [ ! -L "$capture/CMakeCache.txt" ] || configure_recapture_required
+  cache_version=
+  for component in MAJOR MINOR PATCH; do
+    value=$(sed -n "s/^CMAKE_CACHE_${component}_VERSION:INTERNAL=//p" "$capture/CMakeCache.txt")
+    case "$value" in ''|*[!0-9]*) configure_recapture_required ;; esac
+    cache_version=${cache_version:+$cache_version.}$value
+  done
+  [ "$(sed -n 's/^cmake.version=//p' "$inventory")" = "$cache_version" ] &&
+    grep -qx 'host.arch=arm64' "$inventory" &&
+    grep -Eq '^CMAKE_OSX_ARCHITECTURES:[^=]+=arm64$' "$capture/CMakeCache.txt" &&
+    grep -Eq '^CMAKE_OSX_DEPLOYMENT_TARGET:[^=]+=14\.0$' "$capture/CMakeCache.txt" || configure_recapture_required
+  for formula in $(required_formulae); do
+    grep -Eq "^formula\.$formula=[^=]+$" "$inventory" &&
+      grep -Eq "^formula\.$formula\.prefix=/[^=]+$" "$inventory" || configure_recapture_required
+  done
+  prepare_inventory_output "$sidecar"
+  temporary=$(mktemp "$sidecar.tmp.XXXXXX") || configure_recapture_required
+  configure_reuse_inputs "$root/Source/airdcpp-core" "$inventory" > "$temporary"
+  mv "$temporary" "$sidecar" || configure_recapture_required
+)
+
+configure_literal_command() (
+  for argument do
+    printf "'%s' " "$(printf '%s' "$argument" | sed "s/'/'\\\\''/g")"
+  done
+  printf '\n'
+)
+
+capture_unmodified_configure() (
+  root=$1; checkout=$2; capture=$3; prefixes=$4; packages=$5
+  inputs=$(configure_reuse_inputs "$checkout" "$root/Build/airdcpp-core/evidence/host-inventory.txt")
+  if [ -e "$capture" ]; then
+    [ -d "$capture" ] && [ ! -L "$capture" ] || configure_recapture_required
+    for field in command.txt inputs.txt exit-code.txt configure.log; do
+      [ -f "$capture/$field" ] && [ ! -L "$capture/$field" ] || configure_recapture_required
+    done
+    comparison=$capture/inputs.txt
+    if ! grep -q '^cmake.version=' "$comparison"; then
+      [ "$(cat "$comparison")" = "$(configure_original_inputs "$checkout")" ] || configure_recapture_required
+      comparison=$root/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt
+    fi
+    [ -f "$comparison" ] && [ ! -L "$comparison" ] && [ "$(cat "$comparison")" = "$inputs" ] || configure_recapture_required
+    printf 'build: reusing preserved unmodified configure status %s\n' "$(cat "$capture/exit-code.txt")"
+    return 0
+  fi
+  prepare_inventory_output "$capture/command.txt"
+  stage=$(mktemp -d "$root/Build/airdcpp-core/.unmodified.XXXXXX") || configure_die "failed to reserve capture"
+  # Configure into the final directory, but publish all four record files only
+  # after the process terminates. An interrupted attempt is intentionally partial.
+  set -- cmake -S "$checkout" -B "$capture" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+    -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DCMAKE_FIND_DEBUG_MODE=ON
+  configure_literal_command "$@" | sed "s|$root/||g" > "$stage/command.txt"
+  printf '%s\n' "$inputs" > "$stage/inputs.txt"
+  status=0
+  PKG_CONFIG_PATH=$packages "$@" > "$stage/configure.log" 2>&1 || status=$?
+  printf '%s\n' "$status" > "$stage/exit-code.txt"
+  for field in command.txt inputs.txt exit-code.txt configure.log; do
+    mv "$stage/$field" "$capture/$field" || configure_die "failed to publish capture"
+  done
+  rmdir "$stage"
+  printf 'build: preserved unmodified configure status %s; log: %s/configure.log\n' "$status" "$capture"
+)
+
+run_wrapper_configure() (
+  root=$1; output=$2; prefixes=$3; packages=$4
+  prepare_inventory_output "$output/command.txt"
+  [ -d "$output" ] && [ ! -L "$output" ] || configure_die "wrapper output is not a real directory"
+  output_links=$(find "$output" -type l -print) || configure_die 'failed to inspect wrapper output'
+  [ -z "$output_links" ] || configure_die 'refusing symlinked wrapper output'
+  for field in command.txt configure.log cache.txt; do prepare_inventory_output "$output/$field"; done
+  bzip2=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix bzip2) || configure_die 'BZip2 prefix unavailable'
+  zlib=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix zlib) || configure_die 'ZLIB prefix unavailable'
+  openssl=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix openssl@3) || configure_die 'OpenSSL prefix unavailable'
+  iconv=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix libiconv) || configure_die 'Iconv prefix unavailable'
+  set -- cmake --fresh -S "$root" -B "$output" -G Ninja \
+    "-DCMAKE_TOOLCHAIN_FILE=$root/cmake/toolchains/macos-arm64.cmake" \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+    -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF \
+    -DENABLE_NATPMP=OFF -DENABLE_TBB=OFF "-DCMAKE_PREFIX_PATH=$prefixes" \
+    "-DBZIP2_ROOT=$bzip2" "-DZLIB_ROOT=$zlib" "-DOPENSSL_ROOT_DIR=$openssl" \
+    "-DIconv_INCLUDE_DIR=$iconv/include" "-DIconv_LIBRARY=$iconv/lib/libiconv.dylib" \
+    -DCMAKE_FIND_DEBUG_MODE=ON
+  command_tmp=$(mktemp "$output/command.txt.tmp.XXXXXX") || configure_die 'failed to reserve command evidence'
+  configure_literal_command "$@" | sed "s|$root/||g; s|'$root'|'.'|g" > "$command_tmp"
+  mv "$command_tmp" "$output/command.txt" || configure_die 'failed to publish wrapper command'
+  status=0
+  PKG_CONFIG_PATH=$packages "$@" > "$output/configure.log" 2>&1 || status=$?
+  [ "$status" -eq 0 ] || configure_die "wrapper configure failed (status $status); log: $output/configure.log; correct the discovery inputs and rerun scripts/build --configure-only"
+  cmake -N -LA "$output" > "$output/cache.txt" 2>&1 ||
+    configure_die "wrapper cache inspection failed; log: $output/cache.txt; inspect the cache and rerun scripts/build --configure-only"
+)
+
 required_formulae() {
   printf '%s\n' cmake ninja boost bzip2 zlib openssl@3 miniupnpc \
     leveldb libmaxminddb snappy libiconv pkgconf python@3.14
