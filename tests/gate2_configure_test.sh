@@ -10,6 +10,50 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 [ "${AIRDCCORE_RUN_CONFIGURE_TESTS:-0}" = 1 ] ||
   fail "set AIRDCCORE_RUN_CONFIGURE_TESTS=1 to run the real Gate 2 configure test"
 
+# This reviewed evidence contract catches missing/incomplete reports, leaked
+# host paths, optional-policy drift, and claims beyond configure-only evidence.
+REPORT=$ROOT/docs/reports/2026-09-05-gate-2-native-configure.md
+assert_file_present "$REPORT"
+while IFS= read -r heading; do
+  assert_line "$REPORT" "$heading" "Gate 2 report heading"
+done <<'EOF'
+## Scope and result
+## Source identity and cleanliness
+## Host and tool inventory
+## Homebrew formula inventory
+## Unmodified upstream configure
+## Wrapper-only configure
+## Adaptations and evidence
+## Final deterministic configure
+## Deployment target decision
+## Optional NAT-PMP and TBB behavior
+## Package resolution
+## Warnings and failures
+## Rerun and scope verification
+## Gate 2 review decision
+EOF
+assert_contains "$(cat "$REPORT")" "Dist is absent" "report publication absence"
+assert_contains "$(cat "$REPORT")" "libairdcpp.a is absent" "report Core archive absence"
+awk '
+  /^## / { section = $0 }
+  {
+    lower = tolower($0)
+    if (index($0, "/Users/")) bad = "user-home path"
+    if ($0 ~ /ENABLE_(NATPMP|TBB)=ON/ &&
+        section != "## Unmodified upstream configure" &&
+        section != "## Optional NAT-PMP and TBB behavior") bad = "optional ON outside discovery/probe sections"
+    negative = lower ~ /(^|[^a-z])(no|not|never|absent|without|unproven|outside)([^a-z]|$)/
+    if (!negative && lower ~ /(dist|libairdcpp[.]a)/ &&
+        lower ~ /(produc|creat|built|build succeeded|generat|publish)/) bad = "publication/archive production claim"
+    if (!negative && lower ~ /(airdc[+][+] core|airdcpp core|core)/ &&
+        lower ~ /(compil(e|es|ed|ation|ing).*(success|succeed|pass)|success.*compil(e|es|ed|ation|ing))/) bad = "Core compile-success claim"
+    excluded = lower ~ /(websocket[+][+]|websocketpp|nlohmann[- ]json|npm|boost([ :.]|::)*system)/
+    if (excluded && (section == "## Package resolution" ||
+        (!negative && lower ~ /(resolv|found|imported)/))) bad = "unsupported package resolution claim"
+    if (bad) { printf "FAIL: Gate 2 report line %d: %s\n", NR, bad > "/dev/stderr"; exit 1 }
+  }
+' "$REPORT" || fail "Gate 2 report contract"
+
 . "$ROOT/scripts/lib/configure.sh"
 CHECKOUT=$ROOT/Source/airdcpp-core
 BUILD=$ROOT/Build/airdcpp-core

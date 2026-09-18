@@ -2,12 +2,12 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-No build or release workflow exists at the design-baseline commit.
+Acquisition and native configure-only discovery are implemented. Core build and release workflows remain deferred.
 
 ## Required sequence
 
 1. **Acquire:** fetch the versioned upstream URL, verify the exact commit, and leave the checkout in a known state.
-2. **Discover:** use Homebrew-assisted host tooling and dependency discovery for the first native feasibility build.
+2. **Discover:** use Homebrew-assisted host tooling and dependency discovery for native configure-only feasibility evidence; stop before Core compilation.
 3. **Build core:** configure Release with Apple Clang/libc++, `BUILD_SHARED_LIBS=OFF`, and `CMAKE_OSX_ARCHITECTURES=arm64`.
 4. **Close the link:** inspect unresolved symbols and link a real external C++ program. Record every required archive, framework, and system library.
 5. **Choose distribution shape:** decide from evidence whether `Dist/lib` contains one archive, multiple archives plus an explicit link interface, or an aggregate artifact.
@@ -18,6 +18,24 @@ No build or release workflow exists at the design-baseline commit.
 Gate 1 is exercised by `tests/gate1_network_test.sh`. It is network-opt-in because it moves a validated clean checkout aside, reconstructs the canonical checkout twice, and retains the second verified reconstruction. Offline safety and failure paths are covered by `tests/upstream_config_test.sh` and `tests/update_test.sh`.
 
 No later phase may conceal a failed earlier gate with an undocumented patch or manually copied local artifact.
+
+## Gate 2 operator contract
+
+On native macOS arm64 with Xcode/Apple Clang and the [required discovery formulas](dependencies.md), run:
+
+```sh
+./scripts/update
+./scripts/build --configure-only
+AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
+```
+
+`update` reconstructs or validates exact detached Source. `build` accepts only `--configure-only` and refuses unsupported arguments, invalid/dirty source, unsafe output paths, missing required formulas, or outside-scope mutation. It sets Release/static Core/C++20/arm64/libc++/deployment-14.0 and explicit NAT-PMP/TBB OFF. Homebrew inputs remain discovery-only. CMake compiler identification/ABI/check probes are permitted; no Core target, direct Ninja build, archive, or packaging operation is invoked.
+
+The real gate requires `AIRDCCORE_RUN_CONFIGURE_TESTS=1`; without it, refusal precedes configure. Its expected tracked evidence path is [docs/reports/2026-09-05-gate-2-native-configure.md](reports/2026-09-05-gate-2-native-configure.md). The gate checks report headings/claim boundaries as well as exact source/compiler/policy/imported-target resolution, immutable raw captures, before/after filesystem state, and absence of Core products, Ninja invocation logs, `Dependencies`, and `Dist`.
+
+Raw output stays below `Build/airdcpp-core`: `unmodified` preserves the first standalone attempt, `wrapper-baseline` the first wrapper-only attempt, `evidence` the inventory/reuse inputs, and `release` the refreshed final command/log/cache/summary/graph. A complete matching unmodified record is reused, never overwritten; partial or changed input evidence is refused with an instruction to archive or remove that specific capture before intentional recapture. The reviewed historical input schema remains unchanged, with a separate reuse sidecar. Reruns use `--fresh` for release and must leave Source and all outside-output content unchanged. Raw evidence is ignored, not published as tracked logs.
+
+Hard stop: Gate 2 success is configuration evidence only. Do not proceed to Phase 3 compilation or create `libairdcpp.a`, `Dependencies`, or `Dist` as part of these commands. Consumer linking, binary/runtime compatibility, pinned inputs, packaging, and release approval require their own later gates.
 
 ## Release evidence
 

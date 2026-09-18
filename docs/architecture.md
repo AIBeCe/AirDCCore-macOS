@@ -28,10 +28,20 @@ versioned pins + tracked patches
 
 ## Stable interface
 
-The future user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Their names and responsibilities are stable; their implementation is deferred.
+The stable user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Acquisition and `scripts/build --configure-only` are implemented; compilation, verification, and cleaning entry-point workflows remain deferred.
 
 `Dist` is the only published output boundary. Consumers must not depend on `Build`, Homebrew paths, or the upstream checkout.
 
 ## Platform invariant
 
 All compiled artifacts must be Apple Clang/libc++ Release artifacts containing only the Mach-O `arm64` architecture. x86_64 and universal output are explicitly unsupported.
+
+## Implemented Phase 2 flow
+
+```text
+scripts/build -> scripts/lib/configure.sh -> wrapper/toolchain -> unmodified Source
+```
+
+The wrapper nests the pinned checkout without patching it, supplies missing parent check modules/contracts, and applies Release/static Core/C++20/arm64/libc++/deployment-14.0 policy. Homebrew package adapters are narrow discovery shims; imported dependencies may be shared libraries even though Core policy is static.
+
+All raw configure output, inventory, cache, summary, and compiler/check probes live below `Build/airdcpp-core`. Historical unmodified and wrapper-only attempts are immutable; reruns refresh only the final release configuration and host inventory. Only the [normalized Gate 2 report](reports/2026-09-05-gate-2-native-configure.md) is tracked. Scope snapshots reject source mutation, outside-output changes, Core build products, and `Dependencies`/`Dist` creation. Generating `build.ninja` does not execute it. The flow stops before Phase 3 compilation and does not implement the future publication flow above.
