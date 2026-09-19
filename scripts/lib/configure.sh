@@ -68,20 +68,25 @@ configure_recapture_required() {
 }
 
 configure_original_inputs() (
-  printf 'upstream.commit=%s\n' "$(git -C "$1" rev-parse HEAD)"
-  printf 'upstream.cmakelists.sha256=%s\n' "$(configure_fingerprint "$1/CMakeLists.txt")"
-  printf 'upstream.pre_status=clean\nupstream.post_status=clean\n'
+  original_commit=$(git -C "$1" rev-parse HEAD) || exit $?
+  original_cmake_hash=$(configure_fingerprint "$1/CMakeLists.txt") || exit $?
+  printf 'upstream.commit=%s\n' "$original_commit" || exit 1
+  printf 'upstream.cmakelists.sha256=%s\n' "$original_cmake_hash" || exit 1
+  printf 'upstream.pre_status=clean\nupstream.post_status=clean\n' || exit 1
   for generated in airdcpp/core/version.inc airdcpp/core/localization/StringDefs.cpp; do
-    fingerprint=$(configure_fingerprint "$1/$generated")
-    printf 'generated.%s.pre=%s\ngenerated.%s.post=%s\n' "$generated" "$fingerprint" "$generated" "$fingerprint"
+    fingerprint=$(configure_fingerprint "$1/$generated") || exit $?
+    printf 'generated.%s.pre=%s\ngenerated.%s.post=%s\n' "$generated" "$fingerprint" "$generated" "$fingerprint" || exit 1
   done
 )
 
 configure_reuse_inputs() (
-  configure_original_inputs "$1"
-  printf 'cmake.version=%s\n' "$(sed -n 's/^cmake.version=//p' "$2")"
-  printf 'formula.inventory.sha256=%s\n' "$(sed -n '/^formula\./p' "$2" | shasum -a 256 | cut -d ' ' -f1)"
-  printf 'architecture=arm64\ndeployment_target=14.0\n'
+  configure_original_inputs "$1" || exit $?
+  reuse_cmake_version=$(sed -n 's/^cmake.version=//p' "$2") || exit $?
+  reuse_formula_inventory=$(sed -n '/^formula\./p' "$2") || exit $?
+  reuse_inventory_hash=$(printf '%s\n' "$reuse_formula_inventory" | shasum -a 256) || exit $?
+  printf 'cmake.version=%s\n' "$reuse_cmake_version" || exit 1
+  printf 'formula.inventory.sha256=%s\n' "${reuse_inventory_hash%% *}" || exit 1
+  printf 'architecture=arm64\ndeployment_target=14.0\n' || exit 1
 )
 
 # Task2 captured a narrower schema. Never add fields to that historical file:
@@ -98,7 +103,9 @@ prepare_unmodified_reuse_metadata() (
   done
   grep -Eq '^[0-9]+$' "$capture/exit-code.txt" || configure_recapture_required
   grep -q '^cmake.version=' "$capture/inputs.txt" && return 0
-  [ "$(cat "$capture/inputs.txt")" = "$(configure_original_inputs "$root/Source/airdcpp-core")" ] || configure_recapture_required
+  original_inputs=$(configure_original_inputs "$root/Source/airdcpp-core") || configure_recapture_required
+  preserved_inputs=$(cat "$capture/inputs.txt") || configure_recapture_required
+  [ "$preserved_inputs" = "$original_inputs" ] || configure_recapture_required
   if [ -e "$sidecar" ]; then
     [ -f "$sidecar" ] && [ ! -L "$sidecar" ] || configure_recapture_required
     return 0
@@ -107,11 +114,12 @@ prepare_unmodified_reuse_metadata() (
     [ ! -L "$capture/CMakeCache.txt" ] || configure_recapture_required
   cache_version=
   for component in MAJOR MINOR PATCH; do
-    value=$(sed -n "s/^CMAKE_CACHE_${component}_VERSION:INTERNAL=//p" "$capture/CMakeCache.txt")
+    value=$(sed -n "s/^CMAKE_CACHE_${component}_VERSION:INTERNAL=//p" "$capture/CMakeCache.txt") || configure_recapture_required
     case "$value" in ''|*[!0-9]*) configure_recapture_required ;; esac
     cache_version=${cache_version:+$cache_version.}$value
   done
-  [ "$(sed -n 's/^cmake.version=//p' "$inventory")" = "$cache_version" ] &&
+  inventory_version=$(sed -n 's/^cmake.version=//p' "$inventory") || configure_recapture_required
+  [ "$inventory_version" = "$cache_version" ] &&
     grep -qx 'host.arch=arm64' "$inventory" &&
     grep -Eq '^CMAKE_OSX_ARCHITECTURES:[^=]+=arm64$' "$capture/CMakeCache.txt" &&
     grep -Eq '^CMAKE_OSX_DEPLOYMENT_TARGET:[^=]+=14\.0$' "$capture/CMakeCache.txt" || configure_recapture_required
@@ -119,9 +127,13 @@ prepare_unmodified_reuse_metadata() (
     grep -Eq "^formula\.$formula=[^=]+$" "$inventory" &&
       grep -Eq "^formula\.$formula\.prefix=/[^=]+$" "$inventory" || configure_recapture_required
   done
+  reuse_inputs=$(configure_reuse_inputs "$root/Source/airdcpp-core" "$inventory") || configure_recapture_required
   prepare_inventory_output "$sidecar"
   temporary=$(mktemp "$sidecar.tmp.XXXXXX") || configure_recapture_required
-  configure_reuse_inputs "$root/Source/airdcpp-core" "$inventory" > "$temporary"
+  printf '%s\n' "$reuse_inputs" > "$temporary" || {
+    rm -f "$temporary"
+    configure_recapture_required
+  }
   mv "$temporary" "$sidecar" || configure_recapture_required
 )
 
@@ -134,7 +146,8 @@ configure_literal_command() (
 
 capture_unmodified_configure() (
   root=$1; checkout=$2; capture=$3; prefixes=$4; packages=$5
-  inputs=$(configure_reuse_inputs "$checkout" "$root/Build/airdcpp-core/evidence/host-inventory.txt")
+  inputs=$(configure_reuse_inputs "$checkout" "$root/Build/airdcpp-core/evidence/host-inventory.txt") ||
+    configure_die 'failed to read unmodified configure inputs; no capture was published'
   if [ -e "$capture" ]; then
     [ -d "$capture" ] && [ ! -L "$capture" ] || configure_recapture_required
     for field in command.txt inputs.txt exit-code.txt configure.log; do
@@ -142,10 +155,14 @@ capture_unmodified_configure() (
     done
     comparison=$capture/inputs.txt
     if ! grep -q '^cmake.version=' "$comparison"; then
-      [ "$(cat "$comparison")" = "$(configure_original_inputs "$checkout")" ] || configure_recapture_required
+      original_inputs=$(configure_original_inputs "$checkout") || configure_recapture_required
+      preserved_inputs=$(cat "$comparison") || configure_recapture_required
+      [ "$preserved_inputs" = "$original_inputs" ] || configure_recapture_required
       comparison=$root/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt
     fi
-    [ -f "$comparison" ] && [ ! -L "$comparison" ] && [ "$(cat "$comparison")" = "$inputs" ] || configure_recapture_required
+    [ -f "$comparison" ] && [ ! -L "$comparison" ] || configure_recapture_required
+    preserved_inputs=$(cat "$comparison") || configure_recapture_required
+    [ "$preserved_inputs" = "$inputs" ] || configure_recapture_required
     printf 'build: reusing preserved unmodified configure status %s\n' "$(cat "$capture/exit-code.txt")"
     return 0
   fi

@@ -318,4 +318,103 @@ fi
 assert_contains "$output" 'unsafe path component' "parent-traversal inventory diagnostic"
 assert_file_absent "$CASE_PROJECT/Build/escaped.txt"
 
+# Gate 2 must check the final file, not just its physical containing directory.
+formula_fixture=$WORK/formula-prefix
+mkdir -p "$formula_fixture/lib" "$WORK/outside-prefix"
+printf 'library\n' > "$formula_fixture/lib/real.dylib"
+printf 'outside library\n' > "$WORK/outside-prefix/real.dylib"
+ln -s real.dylib "$formula_fixture/lib/internal.dylib"
+ln -s ../../outside-prefix/real.dylib "$formula_fixture/lib/escape.dylib"
+ln -s escape.dylib "$formula_fixture/lib/chain.dylib"
+INVENTORY=$WORK/path-inventory.txt
+printf 'formula.boost.prefix=%s\n' "$formula_fixture" > "$INVENTORY"
+for library in real internal; do
+  FAKE_BOOST_PREFIX=$formula_fixture PATH="$FAKE_BIN:$PATH" \
+    assert_formula_path "$formula_fixture/lib/$library.dylib" boost
+done
+for library in escape chain; do
+  if output=$(FAKE_BOOST_PREFIX=$formula_fixture PATH="$FAKE_BIN:$PATH" \
+    assert_formula_path "$formula_fixture/lib/$library.dylib" boost 2>&1); then
+    fail "Gate 2 accepted library symlink $library outside formula prefix"
+  fi
+  assert_contains "$output" 'path outside recorded Homebrew prefix' 'escaping library diagnostic'
+done
+
+# Failed provenance reads must not become successful printf output or publish
+# immutable evidence, even when a tool emits plausible output before failing.
+metadata_failures=0
+mkdir -p "$CASE_CHECKOUT/airdcpp/core"
+printf 'project(metadata_fixture)\n' > "$CASE_CHECKOUT/CMakeLists.txt"
+for probe in git source-hash generated-hash cmake-read formula-read inventory-hash; do
+  for operation in original reuse capture sidecar existing; do
+    case "$operation:$probe" in original:cmake-read|original:formula-read|original:inventory-hash) continue ;; esac
+    metadata_root=$WORK/metadata-$probe-$operation
+    mkdir -p "$metadata_root/Source" "$metadata_root/Build/airdcpp-core/evidence"
+    cp -R "$CASE_CHECKOUT" "$metadata_root/Source/airdcpp-core"
+    cp "$WORK/inventory.txt" "$metadata_root/Build/airdcpp-core/evidence/host-inventory.txt"
+    metadata_capture=$metadata_root/Build/airdcpp-core/unmodified
+    if [ "$operation" = sidecar ] || [ "$operation" = existing ]; then
+      mkdir -p "$metadata_capture"
+      printf 'original command\n' > "$metadata_capture/command.txt"
+      printf 'original log\n' > "$metadata_capture/configure.log"
+      printf '1\n' > "$metadata_capture/exit-code.txt"
+      configure_original_inputs "$metadata_root/Source/airdcpp-core" > "$metadata_capture/inputs.txt"
+      printf 'CMAKE_CACHE_MAJOR_VERSION:INTERNAL=3\nCMAKE_CACHE_MINOR_VERSION:INTERNAL=31\nCMAKE_CACHE_PATCH_VERSION:INTERNAL=6\nCMAKE_OSX_ARCHITECTURES:STRING=arm64\nCMAKE_OSX_DEPLOYMENT_TARGET:STRING=14.0\n' > "$metadata_capture/CMakeCache.txt"
+      if [ "$operation" = existing ]; then
+        configure_reuse_inputs "$metadata_root/Source/airdcpp-core" "$metadata_root/Build/airdcpp-core/evidence/host-inventory.txt" > "$metadata_capture/inputs.txt"
+      fi
+    fi
+    metadata_before=$(find "$metadata_root" -type f -exec shasum -a 256 {} \;)
+    if output=$(PROBE=$probe OPERATION=$operation sh -eu -c '
+      . "$1"
+      PROJECT_ROOT=$2
+      checkout=$2/Source/airdcpp-core
+      inventory=$2/Build/airdcpp-core/evidence/host-inventory.txt
+      case "$PROBE" in
+        git) git() { printf "0123456789012345678901234567890123456789\n"; return 71; } ;;
+        source-hash|generated-hash|inventory-hash)
+          shasum() {
+            case "$PROBE:${3:-}" in
+              source-hash:*/CMakeLists.txt|generated-hash:*/version.inc|inventory-hash:)
+                printf "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  file\n"; return 72 ;;
+            esac
+            command shasum "$@"
+          } ;;
+        cmake-read|formula-read)
+          sed() {
+            case "$PROBE:$*" in
+              cmake-read:*cmake.version*|formula-read:*formula*) command sed "$@"; return 73 ;;
+            esac
+            command sed "$@"
+          } ;;
+      esac
+      case "$OPERATION" in
+        original) configure_original_inputs "$checkout" ;;
+        reuse) configure_reuse_inputs "$checkout" "$inventory" ;;
+        capture|existing) capture_unmodified_configure "$2" "$checkout" "$2/Build/airdcpp-core/unmodified" "" "" ;;
+        sidecar) prepare_unmodified_reuse_metadata "$2" ;;
+      esac
+    ' sh "$ROOT/scripts/lib/configure.sh" "$metadata_root" 2>&1); then
+      printf 'FAIL: %s accepted failed %s provenance read\n' "$operation" "$probe" >&2
+      metadata_failures=$((metadata_failures + 1))
+    fi
+    if [ "$operation" = capture ]; then
+      [ ! -e "$metadata_capture/inputs.txt" ] || {
+        printf 'FAIL: capture published inputs after failed %s read\n' "$probe" >&2
+        metadata_failures=$((metadata_failures + 1))
+      }
+    fi
+    if [ "$operation" = sidecar ]; then
+      [ ! -e "$metadata_root/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt" ] || {
+        printf 'FAIL: sidecar published after failed %s read\n' "$probe" >&2
+        metadata_failures=$((metadata_failures + 1))
+      }
+    fi
+    if [ "$operation" = existing ]; then
+      assert_eq "$(find "$metadata_root" -type f -exec shasum -a 256 {} \;)" "$metadata_before" 'existing evidence survives failed read'
+    fi
+  done
+done
+[ "$metadata_failures" -eq 0 ] || fail "$metadata_failures failed provenance checks accepted/published"
+
 printf 'PASS: configure discovery helpers\n'

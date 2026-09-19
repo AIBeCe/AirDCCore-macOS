@@ -118,24 +118,6 @@ target_field() {
   ' "$SUMMARY" || fail "$1: expected one evidence field $2"
 }
 
-assert_formula_path() {
-  resolved_path=$1
-  resolved_formula=$2
-  [ -e "$resolved_path" ] || fail "$resolved_formula: missing resolved path $resolved_path"
-  formula_prefix=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix "$resolved_formula")
-  assert_line "$INVENTORY" "formula.$resolved_formula.prefix=$formula_prefix" "$resolved_formula inventory prefix"
-  physical_prefix=$(CDPATH= cd -- "$formula_prefix" && pwd -P)
-  if [ -d "$resolved_path" ]; then
-    physical_path=$(CDPATH= cd -- "$resolved_path" && pwd -P)
-  else
-    physical_path=$(CDPATH= cd -- "$(dirname -- "$resolved_path")" && pwd -P)/$(basename -- "$resolved_path")
-  fi
-  case "$physical_path" in
-    "$physical_prefix"|"$physical_prefix"/*) ;;
-    *) fail "$resolved_formula: path outside recorded Homebrew prefix: $resolved_path" ;;
-  esac
-}
-
 assert_no_compilation_outputs() {
   artifacts=$(find "$BUILD" -type f \( -name '*.o' -o -name '*.a' -o -name '*.dylib' \))
   while IFS= read -r artifact; do
@@ -154,10 +136,7 @@ EOF
   assert_dir_absent "$ROOT/Dependencies"
 }
 
-for field in command.txt inputs.txt exit-code.txt configure.log; do
-  assert_file_present "$BUILD/unmodified/$field"
-done
-assert_file_present "$BUILD/evidence/unmodified-reuse-inputs.txt"
+assert_unmodified_capture
 assert_no_compilation_outputs
 BEFORE_PARENT=$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)
 BEFORE_UPSTREAM=$(git -C "$CHECKOUT" status --porcelain=v1 --untracked-files=all)

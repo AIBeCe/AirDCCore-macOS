@@ -87,6 +87,13 @@ expect_failure() {
  if output=$("$@" 2>&1); then fail "$expected unexpectedly succeeded"; fi
  assert_contains "$output" "$expected" "$expected diagnostic"
 }
+gate_capture_preconditions() (
+ . "$ROOT/scripts/lib/configure.sh"
+ BUILD=$CASE_ROOT/Build/airdcpp-core
+ CHECKOUT=$CASE_ROOT/Source/airdcpp-core
+ INVENTORY=$BUILD/evidence/host-inventory.txt
+ assert_unmodified_capture
+)
 new_case success
 # Failed external probes must fail the real snapshot even when they emit
 # plausible partial output, including when called under an if/|| context.
@@ -144,10 +151,18 @@ assert_contains "$output" 'preserved unmodified configure status 1' 'first captu
 assert_contains "$output" 'configure-only Gate 2 candidate succeeded; no compilation was invoked' 'success'
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/unmodified/configure.log"
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/release/CMakeCache.txt"
+assert_file_absent "$CASE_ROOT/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt"
+gate_capture_preconditions
+cp "$CASE_ROOT/Build/airdcpp-core/unmodified/inputs.txt" "$WORK/full-inputs.txt"
+printf 'cmake.version=wrong\n' >> "$CASE_ROOT/Build/airdcpp-core/unmodified/inputs.txt"
+expect_failure 'unmodified capture inputs do not match' gate_capture_preconditions
+cp "$WORK/full-inputs.txt" "$CASE_ROOT/Build/airdcpp-core/unmodified/inputs.txt"
 before=$(find "$CASE_ROOT/Build/airdcpp-core/unmodified" -type f -exec shasum -a 256 {} \;)
 inventory=$(cat "$CASE_ROOT/Build/airdcpp-core/evidence/host-inventory.txt")
 output=$(run_case)
 assert_contains "$output" 'reusing preserved unmodified configure' 'reuse'
+assert_file_absent "$CASE_ROOT/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt"
+gate_capture_preconditions
 assert_eq "$(find "$CASE_ROOT/Build/airdcpp-core/unmodified" -type f -exec shasum -a 256 {} \;)" "$before" 'immutable capture'
 assert_eq "$(grep -c -- '-S .*Source/airdcpp-core' "$FAKE_CMAKE_CALLS")" 1 'single raw invocation'
 assert_eq "$(wc -l < "$FAKE_CMAKE_CALLS" | tr -d ' ')" 3 'two wrapper invocations'
@@ -211,8 +226,14 @@ printf 'upstream.commit=%s\nupstream.cmakelists.sha256=%s\nupstream.pre_status=c
  "$FIXTURE_PIN" "$(shasum -a 256 "$CASE_ROOT/Source/airdcpp-core/CMakeLists.txt" | cut -d ' ' -f1)" > "$legacy/inputs.txt"
 printf 'CMAKE_CACHE_MAJOR_VERSION:INTERNAL=3\nCMAKE_CACHE_MINOR_VERSION:INTERNAL=31\nCMAKE_CACHE_PATCH_VERSION:INTERNAL=6\nCMAKE_OSX_ARCHITECTURES:STRING=arm64\nCMAKE_OSX_DEPLOYMENT_TARGET:STRING=14.0\n' > "$legacy/CMakeCache.txt"
 legacy_before=$(find "$legacy" -type f -exec shasum -a 256 {} \;)
+expect_failure 'expected existing path:' gate_capture_preconditions
 run_case >/dev/null
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt"
+gate_capture_preconditions
+cp "$CASE_ROOT/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt" "$WORK/valid-sidecar.txt"
+printf 'cmake.version=wrong\n' >> "$CASE_ROOT/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt"
+expect_failure 'unmodified capture inputs do not match' gate_capture_preconditions
+cp "$WORK/valid-sidecar.txt" "$CASE_ROOT/Build/airdcpp-core/evidence/unmodified-reuse-inputs.txt"
 assert_eq "$(find "$legacy" -type f -exec shasum -a 256 {} \;)" "$legacy_before" 'legacy immutable files'
 FAKE_CMAKE_VERSION=3.32.0; export FAKE_CMAKE_VERSION
 expect_failure 'archive or remove Build/airdcpp-core/unmodified before recapturing changed inputs' run_case
