@@ -113,6 +113,36 @@ assert_line "$CASE_ROOT/Build/airdcpp-core/core-release/build-exit-code.txt" 29 
 assert_contains "$(cat "$CASE_ROOT/Build/airdcpp-core/core-release/build.log")" 'deliberate compile failure' 'preserved build log'
 assert_file_absent "$CASE_ROOT/Build/airdcpp-core/core-release/upstream/libairdcpp.a"
 assert_dir_absent "$CASE_ROOT/Dist"
+FAILED_OUTPUT=$CASE_ROOT/Build/airdcpp-core/core-release
+first_log_hash=$(shasum -a 256 "$FAILED_OUTPUT/build.log")
+first_log_hash=${first_log_hash%% *}
+first_config_hash=$(shasum -a 256 "$FAILED_OUTPUT/configure.log")
+first_config_hash=${first_config_hash%% *}
+first_inventory_hash=$(shasum -a 256 "$FAILED_OUTPUT/host-inventory.txt")
+first_inventory_hash=${first_inventory_hash%% *}
+output=$(run_core)
+assert_contains "$output" 'build: core archive candidate=' 'successful retry'
+ATTEMPT=$FAILED_OUTPUT/attempts/0001
+assert_file_present "$ATTEMPT/build-command.txt"
+assert_file_present "$ATTEMPT/command.txt"
+assert_line "$ATTEMPT/build-exit-code.txt" 29 'preserved failed status'
+assert_eq "$(shasum -a 256 "$ATTEMPT/build.log" | cut -d ' ' -f 1)" "$first_log_hash" 'first build log preserved'
+assert_eq "$(shasum -a 256 "$ATTEMPT/configure.log" | cut -d ' ' -f 1)" "$first_config_hash" 'first configure log preserved'
+assert_eq "$(shasum -a 256 "$ATTEMPT/host-inventory.txt" | cut -d ' ' -f 1)" "$first_inventory_hash" 'first host inventory preserved'
+assert_line "$ATTEMPT/sha256.txt" "$first_log_hash  build.log" 'first build log hash recorded'
+assert_line "$ATTEMPT/sha256.txt" "$first_config_hash  configure.log" 'first configure log hash recorded'
+assert_line "$ATTEMPT/sha256.txt" "$first_inventory_hash  host-inventory.txt" 'first host inventory hash recorded'
+assert_line "$FAILED_OUTPUT/build-exit-code.txt" 0 'retry status'
+
+new_case attempts-conflict
+FAKE_BUILD_FAIL=1; export FAKE_BUILD_FAIL
+expect_failure 'Core build failed' run_core
+unset FAKE_BUILD_FAIL
+CONFLICT_OUTPUT=$CASE_ROOT/Build/airdcpp-core/core-release
+mkdir -p "$CONFLICT_OUTPUT/attempts"
+printf 'conflict\n' > "$CONFLICT_OUTPUT/attempts/0001"
+expect_failure 'attempts' run_core
+assert_contains "$(cat "$CONFLICT_OUTPUT/build.log")" 'deliberate compile failure' 'conflicting attempt did not rewrite log'
 
 new_case symlink
 mkdir -p "$CASE_ROOT/Build/airdcpp-core"

@@ -40,6 +40,26 @@ set(AIRDCPP_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/airdcpp-core" CA
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 add_subdirectory("${AIRDCPP_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/upstream")
 
+# Homebrew LevelDB currently exports its own -Werror to every consumer.
+# Keep its thread-safety diagnostic, but do not let a dependency set Core's
+# warning-as-error policy. Inspect the measured interface before adapting it.
+if(NOT TARGET leveldb::leveldb)
+  message(FATAL_ERROR "LevelDB imported target was not discovered by upstream")
+endif()
+get_target_property(_leveldb_compile_options leveldb::leveldb INTERFACE_COMPILE_OPTIONS)
+if("${_leveldb_compile_options}" MATCHES "-NOTFOUND$")
+  message(FATAL_ERROR "LevelDB interface compile options are unavailable")
+endif()
+list(FIND _leveldb_compile_options "-Werror" _leveldb_werror_index)
+list(FIND _leveldb_compile_options "-Wthread-safety" _leveldb_thread_safety_index)
+if(_leveldb_werror_index EQUAL -1 OR _leveldb_thread_safety_index EQUAL -1)
+  message(FATAL_ERROR
+    "LevelDB interface compile options differ from measured Homebrew input: ${_leveldb_compile_options}")
+endif()
+list(REMOVE_ITEM _leveldb_compile_options "-Werror")
+set_property(TARGET leveldb::leveldb PROPERTY INTERFACE_COMPILE_OPTIONS
+  "${_leveldb_compile_options}")
+
 set(AIRDCPP_CONFIGURE_SUMMARY "${CMAKE_BINARY_DIR}/airdcpp-configure-summary.txt")
 file(WRITE "${AIRDCPP_CONFIGURE_SUMMARY}"
   "compiler.id=${CMAKE_CXX_COMPILER_ID}\n"

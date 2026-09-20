@@ -76,6 +76,58 @@ core_build_inputs() {
     "$AIRDCPP_CORE_COMMIT" "$version" "$clang" "$sdk" "${formula_digest%% *}"
 }
 
+core_preserve_attempt() {
+  attempts=$CORE_OUTPUT/attempts
+  if [ -e "$attempts" ]; then
+    [ -d "$attempts" ] && [ ! -L "$attempts" ] || core_die 'attempts path is not a real directory'
+  else
+    mkdir "$attempts" || core_die 'failed to create attempts directory'
+  fi
+
+  previous=$(find "$attempts" -mindepth 1 -maxdepth 1 -print | LC_ALL=C sort) ||
+    core_die 'failed to inspect previous attempts'
+  next=1
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    expected=$(printf '%04d' "$next")
+    [ "${path##*/}" = "$expected" ] && [ -d "$path" ] && [ ! -L "$path" ] ||
+      core_die "attempts contains an unexpected path: $path"
+    [ -f "$path/sha256.txt" ] && [ ! -L "$path/sha256.txt" ] ||
+      core_die "attempts contains an incomplete record: $path"
+    (cd "$path" && shasum -a 256 -c sha256.txt >/dev/null) ||
+      core_die "attempts contains a changed record: $path"
+    next=$((next + 1))
+  done <<EOF
+$previous
+EOF
+
+  attempt_name=$(printf '%04d' "$next")
+  destination=$attempts/$attempt_name
+  [ ! -e "$destination" ] && [ ! -L "$destination" ] ||
+    core_die "attempts destination already exists: $destination"
+  staging=$(mktemp -d "$attempts/.attempt-XXXXXX") ||
+    core_die 'failed to stage previous attempt'
+  manifest=$staging/sha256.txt
+  : > "$manifest"
+  for field in first-build-state.txt build-inputs.txt host-inventory.txt \
+      command.txt configure.log exit-code.txt cache.txt \
+      airdcpp-configure-summary.txt build-command.txt build.log build-exit-code.txt; do
+    source=$CORE_OUTPUT/$field
+    [ -e "$source" ] || continue
+    [ -f "$source" ] && [ ! -L "$source" ] || core_die "attempt evidence is not a regular file: $field"
+    cp "$source" "$staging/$field" || core_die "failed to copy attempt evidence: $field"
+    original_hash=$(shasum -a 256 "$source") || core_die "failed to hash attempt evidence: $field"
+    copied_hash=$(shasum -a 256 "$staging/$field") || core_die "failed to hash copied evidence: $field"
+    [ "${original_hash%% *}" = "${copied_hash%% *}" ] || core_die "attempt evidence changed while copying: $field"
+    (cd "$staging" && shasum -a 256 "$field") >> "$manifest" ||
+      core_die "failed to record attempt hash: $field"
+  done
+  [ -s "$manifest" ] || core_die 'previous attempt has no evidence to preserve'
+  (cd "$staging" && shasum -a 256 -c sha256.txt >/dev/null) ||
+    core_die 'staged attempt failed hash verification'
+  mv "$staging" "$destination" || core_die 'failed to publish preserved attempt'
+}
+
 load_upstream_config "$PROJECT_ROOT/config/upstream.env" || exit 1
 assert_supported_host
 validate_configure_checkout "$PROJECT_ROOT" "$CHECKOUT" "$AIRDCPP_CORE_COMMIT"
@@ -98,6 +150,7 @@ if [ "$first_build" -eq 1 ]; then
 else
   [ -f "$CORE_OUTPUT/first-build-state.txt" ] || core_die 'missing first-build state on rerun'
   grep -Fqx 'core-release.preexisting=absent' "$CORE_OUTPUT/first-build-state.txt" || core_die 'invalid first-build state on rerun'
+  core_preserve_attempt
 fi
 before_parent=$(configure_tree_snapshot "$PROJECT_ROOT") || core_die 'failed to capture initial parent snapshot'
 before_preserved=$(core_preserved_snapshot) || core_die 'failed to capture initial preserved-evidence snapshot'
