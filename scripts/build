@@ -1,11 +1,15 @@
 #!/bin/sh
 set -eu
-if [ "$#" -ne 1 ] || [ "$1" != --configure-only ]; then
-  printf 'usage: scripts/build --configure-only\n' >&2
-  printf 'build: error: Phase 2 supports only --configure-only\n' >&2
+PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+if [ "$#" -ne 1 ]; then
+  printf 'usage: scripts/build (--configure-only|--build-core)\n' >&2
   exit 64
 fi
-PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+case "$1" in
+  --configure-only) ;;
+  --build-core) exec /bin/sh "$PROJECT_ROOT/scripts/lib/core_build.sh" "$PROJECT_ROOT" ;;
+  *) printf 'build: error: unsupported build mode: %s\n' "$1" >&2; exit 64 ;;
+esac
 CHECKOUT=$PROJECT_ROOT/Source/airdcpp-core
 BUILD_ROOT=$PROJECT_ROOT/Build/airdcpp-core
 . "$PROJECT_ROOT/scripts/lib/upstream.sh"

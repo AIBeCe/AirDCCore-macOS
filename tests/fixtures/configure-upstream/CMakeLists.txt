@@ -50,4 +50,11 @@ set_target_properties(BZip2::BZip2 PROPERTIES
 find_package(BZip2 REQUIRED CONFIG
   PATHS "${CMAKE_CURRENT_BINARY_DIR}/packages" NO_DEFAULT_PATH)
 
-add_library(airdcpp INTERFACE)
+# Model the imported LevelDB interface discovered by the real upstream tree.
+set(FIXTURE_LEVELDB_OPTIONS "-Werror;-Wthread-safety" CACHE STRING "Fixture LevelDB compile options")
+add_library(leveldb::leveldb INTERFACE IMPORTED GLOBAL)
+set_target_properties(leveldb::leveldb PROPERTIES
+  INTERFACE_COMPILE_OPTIONS "${FIXTURE_LEVELDB_OPTIONS}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fixture_core.cpp" "int fixture_core() { return 1; }\n")
+add_library(airdcpp STATIC "${CMAKE_CURRENT_BINARY_DIR}/fixture_core.cpp")
+target_link_libraries(airdcpp PRIVATE leveldb::leveldb)

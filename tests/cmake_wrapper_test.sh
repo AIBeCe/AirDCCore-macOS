@@ -43,6 +43,15 @@ assert_line "$SUMMARY" "cxx_standard=20" "language standard"
 assert_line "$SUMMARY" "enable_natpmp=OFF" "NAT-PMP policy"
 assert_line "$SUMMARY" "enable_tbb=OFF" "TBB policy"
 
+# A package's -Werror must not become a Core compile policy. Other exported
+# options still apply to the generated target command.
+configure_success leveldb-policy -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+CORE_COMMAND=$(cat "$WORK/leveldb-policy/compile_commands.json")
+assert_contains "$CORE_COMMAND" '-Wthread-safety' 'LevelDB thread-safety flag retained'
+assert_not_contains "$CORE_COMMAND" '-Werror' 'LevelDB warning-as-error flag isolated'
+configure_failure leveldb-unexpected-policy 'LevelDB interface compile options' \
+  -DFIXTURE_LEVELDB_OPTIONS=-Wthread-safety
+
 expected_targets='BZip2::BZip2
 ZLIB::ZLIB
 OpenSSL::SSL

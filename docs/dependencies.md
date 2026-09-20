@@ -55,6 +55,12 @@ Final configure explicitly uses `ENABLE_NATPMP=OFF` and `ENABLE_TBB=OFF`; option
 
 No Phase 2 formula becomes a publication dependency or a `Dependencies` source pin. This inventory is measured host discovery, not `config/dependencies.lock` or final portability proof. Pinned dependency reconstruction and link closure remain later gates.
 
+## Gate 3 build observation
+
+The first ARM64 static Core build used the same measured Homebrew formula inventory (SHA-256 `7245d0f1b75d587823e0dd102187f4aef22e3e3fc4fd5ab73457353657bc18d1`). The [Gate 3 report](reports/2026-09-20-gate-3-arm64-core-build.md) records the 13,202,464-byte archive, exact source pin, all 130 ARM64 object checks, and the current imported target locations. A static `libairdcpp.a` does not absorb these imported libraries: ZLIB, OpenSSL, miniupnpc, LevelDB, MaxMindDB, Boost, Snappy, and Iconv currently resolve to Homebrew dylibs, while BZip2 resolves to a static archive and Threads to an SDK interface. This observation is not a final consumer link line.
+
+Homebrew LevelDB 1.23_2 exports `-Werror;-Wthread-safety` as its CMake target's compile interface. The Phase 3 wrapper removes only that transitive `-Werror` for the first Core build; the remaining upstream `HashStore.cpp:404` warning and its possible unchecked database-key length are **not** resolved by this adapter. Phase 4 must discover actual unresolved symbols and link order; later publication work must decide how to fix upstream compatibility/safety issues and pin distributable dependency inputs.
+
 ## Evidence still required
 
 The first ARM64 link-closure experiment must determine dependency versions, static/shared availability, archive link order, Apple frameworks/system libraries, whether Boost thread introduces Boost system, and whether optional NAT-PMP/TBB are part of the supported feature set. WebSocket++ source acquisition remains deferred unless later evidence makes it a core dependency.

@@ -2,7 +2,7 @@
 
 AirDCCore-macOS is the source-acquisition, build, packaging, and verification project for a reproducible AirDC++ Core static distribution targeting macOS on Apple Silicon (`arm64`) only.
 
-Upstream acquisition and Phase 2 native configure-only discovery are implemented and tested. Core compilation, pinned dependency builds, consumer smoke linking, packaging, and `Dist` remain outside the implemented workflow.
+Upstream acquisition, Phase 2 native configure-only discovery, and a Phase 3 native `arm64` static Core build are implemented. The Phase 3 archive is unpackaged and has not been linked by an external consumer. Pinned dependency builds, consumer smoke linking, packaging, and `Dist` remain outside the implemented workflow.
 
 The authoritative design is [docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md](docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md). Shorter operational summaries live in:
 
@@ -23,7 +23,7 @@ The authoritative design is [docs/superpowers/specs/2026-09-04-airdc-core-macos-
 
 This repository will eventually produce headers, static library artifacts, provenance, dependency metadata, checksums, and licenses under `Dist`. It will not contain Objective-C++, Swift, Swift Package Manager integration, AppKit, application architecture, or client UI. Those concerns belong to later projects.
 
-The [reviewed Gate 2 report](docs/reports/2026-09-05-gate-2-native-configure.md) records measured configuration evidence. Phase 3 compilation and later gates require separate authorization.
+The [reviewed Gate 2 report](docs/reports/2026-09-05-gate-2-native-configure.md) records measured configuration evidence. The [Gate 3 report](docs/reports/2026-09-20-gate-3-arm64-core-build.md) records the first compiled archive, member-level ARM64 checks, and its unresolved publication limits. Phase 4 linking and later gates remain separate work.
 
 Parent-repository work follows full GitFlow. `develop` is the integration branch and contains this baseline; `master` is reserved for production releases and will be created by the first release flow rather than seeded with design work.
 
@@ -42,3 +42,13 @@ AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
 ```
 
 The first command reconstructs or validates pinned Source; the second configures only; the third opts into the real Gate 2 check and validates the tracked report. Run on native macOS arm64 with Xcode and the [recorded Homebrew formulas](docs/dependencies.md). Homebrew inputs are discovery-only, not publication dependencies. Evidence stays under `Build/airdcpp-core`; no Core target is compiled, no `Dependencies` or `Dist` is created, and Phase 3 compilation remains outside this command. See the [operator contract](docs/build-and-release.md) for evidence reuse and the hard stop.
+
+## Native static Core build (Phase 3)
+
+```sh
+./scripts/update
+./scripts/build --build-core
+AIRDCCORE_RUN_BUILD_TESTS=1 ./tests/gate3_core_build_test.sh
+```
+
+This separate mode builds only the `airdcpp` target under `Build/airdcpp-core/core-release`; it preserves command, input, failure-attempt, and archive-inspection evidence. The current candidate is `core-release/upstream/libairdcpp.a`, with 130 ARM64 object members. The opt-in gate checks the already-built archive and does not compile it again. It does not prove a final consumer link or create `Dist`. See the [Gate 3 report](docs/reports/2026-09-20-gate-3-arm64-core-build.md) for the first compiler failure, reviewed adapter, warnings, and precise limits.
