@@ -39,7 +39,7 @@ write_fake brew 'case "$1:${2:-}" in' \
 sh -n "$FAKE_BIN/brew"
 assert_eq "$("$FAKE_BIN/brew" list --versions cmake)" 'cmake 1.0.0' 'fake formula inventory'
 assert_eq "$("$FAKE_BIN/brew" --prefix cmake)" '/opt/homebrew/opt/cmake' 'fake formula prefix'
-write_fake ninja '[ "$1" = --version ] && { echo 1.13.2; exit 0; }; exit 97'
+write_fake ninja '[ "$1" = --version ] && { echo "${FAKE_NINJA_VERSION:-1.13.2}"; exit 0; }; exit 97'
 write_fake cmake 'set -eu' \
   'case "${1:-}" in' \
   '  --version) echo "cmake version ${FAKE_CMAKE_VERSION:-4.4.3}"; exit 0 ;;' \
@@ -102,6 +102,8 @@ assert_dir_absent "$CASE_ROOT/Dependencies"
 assert_line "$CASE_ROOT/Build/airdcpp-core/core-release/build-exit-code.txt" 0 'build exit'
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/first-build-state.txt"
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/build-inputs.txt"
+assert_contains "$(cat "$CASE_ROOT/Build/airdcpp-core/core-release/build-inputs.txt")" \
+  'host.toolchain.inventory.sha256=' 'complete toolchain fingerprint'
 MEMBERS=$CASE_ROOT/Build/airdcpp-core/core-release/archive-members.tsv
 SYMBOLS=$CASE_ROOT/Build/airdcpp-core/core-release/archive-symbols.txt
 assert_file_present "$MEMBERS"
@@ -111,6 +113,9 @@ assert_contains "$(cat "$MEMBERS")" 'tiny.o' 'fixture member named in report'
 assert_contains "$(cat "$SYMBOLS")" '_air_dccore_fixture' 'fixture symbol inventory'
 output=$(run_core)
 assert_contains "$output" 'build: core archive candidate=' 'safe rerun'
+FAKE_NINJA_VERSION=1.13.3; export FAKE_NINJA_VERSION
+expect_failure 'build inputs changed' run_core
+unset FAKE_NINJA_VERSION
 FAKE_CMAKE_VERSION=4.4.4; export FAKE_CMAKE_VERSION
 expect_failure 'build inputs changed' run_core
 unset FAKE_CMAKE_VERSION
@@ -119,6 +124,9 @@ expect_failure 'build inputs changed' run_core
 unset FAKE_FORMULA_VERSION
 
 new_case failure
+mkdir -p "$CASE_ROOT/Build/airdcpp-core/release"
+printf 'Gate 2 evidence\n' > "$CASE_ROOT/Build/airdcpp-core/release/original.txt"
+gate2_hash=$(shasum -a 256 "$CASE_ROOT/Build/airdcpp-core/release/original.txt" | cut -d ' ' -f 1)
 FAKE_BUILD_FAIL=1; export FAKE_BUILD_FAIL
 expect_failure 'Core build failed' run_core
 unset FAKE_BUILD_FAIL
@@ -146,6 +154,36 @@ assert_line "$ATTEMPT/sha256.txt" "$first_log_hash  build.log" 'first build log 
 assert_line "$ATTEMPT/sha256.txt" "$first_config_hash  configure.log" 'first configure log hash recorded'
 assert_line "$ATTEMPT/sha256.txt" "$first_inventory_hash  host-inventory.txt" 'first host inventory hash recorded'
 assert_line "$FAILED_OUTPUT/build-exit-code.txt" 0 'retry status'
+assert_eq "$(shasum -a 256 "$CASE_ROOT/Build/airdcpp-core/release/original.txt" | cut -d ' ' -f 1)" "$gate2_hash" 'Gate 2 sibling unchanged across retry'
+
+new_case attempt-symlink
+FAKE_BUILD_FAIL=1; export FAKE_BUILD_FAIL
+expect_failure 'Core build failed' run_core
+unset FAKE_BUILD_FAIL
+output=$(run_core)
+ATTEMPT=$CASE_ROOT/Build/airdcpp-core/core-release/attempts/0001
+mv "$ATTEMPT/build.log" "$WORK/held-attempt-build.log"
+ln -s "$WORK/held-attempt-build.log" "$ATTEMPT/build.log"
+expect_failure 'symlinked core output path' run_core
+
+new_case attempt-manifest-omission
+FAKE_BUILD_FAIL=1; export FAKE_BUILD_FAIL
+expect_failure 'Core build failed' run_core
+unset FAKE_BUILD_FAIL
+output=$(run_core)
+ATTEMPT=$CASE_ROOT/Build/airdcpp-core/core-release/attempts/0001
+mv "$ATTEMPT/build.log" "$WORK/held-omitted-build.log"
+awk '$2 != "build.log"' "$ATTEMPT/sha256.txt" > "$ATTEMPT/sha256.new"
+mv "$ATTEMPT/sha256.new" "$ATTEMPT/sha256.txt"
+expect_failure 'previous attempt is incomplete' run_core
+
+new_case attempt-incomplete
+FAKE_BUILD_FAIL=1; export FAKE_BUILD_FAIL
+expect_failure 'Core build failed' run_core
+unset FAKE_BUILD_FAIL
+mv "$CASE_ROOT/Build/airdcpp-core/core-release/build.log" "$WORK/held-current-build.log"
+expect_failure 'previous attempt is incomplete' run_core
+assert_eq "$(find "$CASE_ROOT/Build/airdcpp-core/core-release/attempts" -mindepth 1 -maxdepth 1 -print)" '' 'invalid current evidence leaves no staged attempt'
 
 new_case attempts-conflict
 FAKE_BUILD_FAIL=1; export FAKE_BUILD_FAIL
@@ -161,6 +199,23 @@ new_case symlink
 mkdir -p "$CASE_ROOT/Build/airdcpp-core"
 ln -s "$WORK" "$CASE_ROOT/Build/airdcpp-core/core-release"
 expect_failure 'symlink' run_core
+
+new_case symlink-source
+mv "$CASE_ROOT/Source" "$WORK/held-source"
+ln -s "$WORK/held-source" "$CASE_ROOT/Source"
+expect_failure 'symlinked Source directory' run_core
+
+new_case symlink-build
+mkdir -p "$WORK/held-build"
+mkdir -p "$CASE_ROOT/Build"
+mv "$CASE_ROOT/Build" "$WORK/held-build/Build"
+ln -s "$WORK/held-build/Build" "$CASE_ROOT/Build"
+expect_failure 'symlinked Build directory' run_core
+
+new_case symlink-build-root
+mkdir -p "$CASE_ROOT/Build" "$WORK/held-build-root"
+ln -s "$WORK/held-build-root" "$CASE_ROOT/Build/airdcpp-core"
+expect_failure 'symlinked Build/airdcpp-core directory' run_core
 
 new_case wrong-head
 git -C "$CASE_ROOT/Source/airdcpp-core" checkout -q --detach "$FIXTURE_LATER"

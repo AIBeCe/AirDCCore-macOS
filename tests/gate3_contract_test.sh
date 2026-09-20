@@ -38,6 +38,9 @@ done
 sed "s|$ROOT|$CASE|g" "$REAL_BUILD/build-command.txt" > "$BUILD/build-command.txt"
 cp "$REAL_BUILD/upstream/libairdcpp.a" "$BUILD/upstream/libairdcpp.a"
 cp -R "$REAL_BUILD/attempts/0001" "$BUILD/attempts/0001"
+assert_line "$REAL_BUILD/attempts/0001/build-exit-code.txt" 1 'historical first failed build status'
+(cd "$REAL_BUILD/attempts/0001" && shasum -a 256 -c sha256.txt >/dev/null) ||
+  fail 'historical first failed build evidence changed'
 
 run_gate() { AIRDCCORE_RUN_BUILD_TESTS=1 sh "$CASE/tests/gate3_core_build_test.sh"; }
 expect_gate_failure() {
@@ -49,6 +52,10 @@ expect_gate_failure() {
 
 output=$(run_gate)
 assert_contains "$output" 'PASS: Gate 3 verified 130 arm64 Core archive members' 'copied valid fixture'
+mv "$BUILD/attempts/0001" "$WORK/held-first-attempt"
+output=$(run_gate)
+assert_contains "$output" 'PASS: Gate 3 verified 130 arm64 Core archive members' 'valid clean first build without a failed attempt'
+mv "$WORK/held-first-attempt" "$BUILD/attempts/0001"
 expect_gate_failure 'set AIRDCCORE_RUN_BUILD_TESTS=1' env AIRDCCORE_RUN_BUILD_TESTS=0 sh "$CASE/tests/gate3_core_build_test.sh"
 
 sed 's/^AIRDCPP_CORE_COMMIT=.*/AIRDCPP_CORE_COMMIT=0000000000000000000000000000000000000000/' \

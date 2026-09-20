@@ -78,10 +78,21 @@ formulae=$(sed -n '/^formula\./p' "$BUILD/host-inventory.txt")
 formula_hash=$(printf '%s\n' "$formulae" | shasum -a 256)
 assert_line "$BUILD/build-inputs.txt" "formula.inventory.sha256=${formula_hash%% *}" 'formula input fingerprint'
 
-FIRST=$BUILD/attempts/0001
-[ -d "$FIRST" ] && [ ! -L "$FIRST" ] || fail 'missing original failed attempt'
-assert_line "$FIRST/build-exit-code.txt" 1 'original failed build status'
-(cd "$FIRST" && shasum -a 256 -c sha256.txt >/dev/null) || fail 'original attempt evidence changed'
+if [ -e "$BUILD/attempts" ] || [ -L "$BUILD/attempts" ]; then
+  [ -d "$BUILD/attempts" ] && [ ! -L "$BUILD/attempts" ] || fail 'unsafe attempts directory'
+  attempts=$(find "$BUILD/attempts" -mindepth 1 -maxdepth 1 -print | LC_ALL=C sort) ||
+    fail 'failed to list preserved attempts'
+  while IFS= read -r attempt; do
+    [ -n "$attempt" ] || continue
+    [ -d "$attempt" ] && [ ! -L "$attempt" ] || fail "unsafe preserved attempt: $attempt"
+    [ -f "$attempt/sha256.txt" ] && [ ! -L "$attempt/sha256.txt" ] ||
+      fail "missing preserved attempt manifest: $attempt"
+    (cd "$attempt" && shasum -a 256 -c sha256.txt >/dev/null) ||
+      fail "preserved attempt evidence changed: $attempt"
+  done <<EOF
+$attempts
+EOF
+fi
 
 [ -f "$ARCHIVE" ] && [ ! -L "$ARCHIVE" ] && [ -s "$ARCHIVE" ] || fail 'missing or unsafe Core archive'
 case "$(/usr/bin/file -b "$ARCHIVE")" in
