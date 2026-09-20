@@ -87,6 +87,21 @@ archive=$CORE_OUTPUT/upstream/libairdcpp.a
 
 - [ ] **Step 3: If the command succeeds, check the actual target.** Confirm `build-exit-code.txt` is `0`, the archive is a regular nonempty file at `core-release/upstream/libairdcpp.a`, and `core-release/.ninja_log` documents an executed build. Record `shasum -a 256` and `ar -t` output as ignored raw evidence. Do not infer a complete dependency link from an archive build.
 
+#### First-attempt checkpoint — 2026-09-20
+
+Steps 1–2 ran. Configuration succeeded; compilation failed at `HashStore.cpp:404` because Homebrew LevelDB exports `-Werror` to Core and Apple Clang 21 diagnoses a `memcpy` into non-trivially-copyable `TTHValue`. The raw log and nonzero exit are preserved; see `docs/reports/2026-09-20-phase-3-first-build-failure.md`. Task 2 is stopped, not complete. No retry or source edit is authorized by this checkpoint alone.
+
+### Task 2A: Isolate dependency warning policy and preserve attempts
+
+**Status:** Approved by the user on 2026-09-20. This is limited to the measured LevelDB export and first-attempt evidence. It does not declare the upstream `memcpy` safe.
+
+**Files:** Modify wrapper `CMakeLists.txt` and `scripts/lib/core_build.sh`; add focused regressions in `tests/cmake_wrapper_test.sh` and `tests/build_core_test.sh`; update the failure report with the reviewed decision. No direct edit under `Source/airdcpp-core`.
+
+- [ ] **Step 1: Write RED tests.** A nested CMake fixture must demonstrate that `leveldb::leveldb` exports `-Werror;-Wthread-safety` and that the wrapper removes only the exact `-Werror` element from the imported target after upstream discovery. The compiled Core command must retain `-Wthread-safety`. A build-mode fixture with a failed first attempt must prove a rerun preserves configure command/log/cache, build command/log/status, host inventory, and their SHA-256 hashes in a non-symlinked, uniquely numbered `core-release/attempts/` record **before reconfiguration or inventory rewrite**. Reject malformed/symlinked attempt paths. Existing configure-only and source-boundary tests must remain green.
+- [ ] **Step 2: Implement the narrow adapter.** After `add_subdirectory` has discovered `leveldb::leveldb`, inspect `INTERFACE_COMPILE_OPTIONS`; remove only an exact `-Werror` list element from that imported target for this wrapper build, leaving all other options untouched. Fail with a clear diagnostic if the target or expected option shape is inconsistent with measured inputs; do not set global warning suppression or edit Homebrew files. In the build script, copy and hash-check the previous attempt's raw evidence before any rerun can overwrite it, and fail closed on pre-existing symlinks or conflicting archive names.
+- [ ] **Step 3: Verify offline and commit the adapter.** Run the new RED/GREEN tests and all six pre-existing offline suites; inspect generated compile-command flags in the controlled fixture. Check `git diff --check`, no tracked `Source`/`Build`/`Dist`/`Dependencies`, and commit the narrow code/test change separately.
+- [ ] **Step 4: One measured native retry.** Verify the original `build.log` still hashes to `991e7429ba6c3622e1dbc8c27fcc3ce530749d80d0803ee6c76ea0a283e14ce8`, the source pin and formula inventory are unchanged, and the preserved attempt is recoverable. Run `./scripts/build --build-core` once. If another fatal compile error appears, preserve that attempt and stop for a new evidence-backed amendment. If the archive builds, resume Task 2 Step 3 and Tasks 3–4. The `HashStore.cpp:404` warning and possible unchecked database-key length remain explicit publication risks; Gate 3 is archive feasibility, not a safety or release approval.
+
 ### Task 3: Member-by-member archive architecture inspector
 
 **Files:** Create `scripts/lib/inspect_core_archive.py`, `tests/archive_inspect_test.py`; modify `scripts/lib/core_build.sh` to call the inspector after successful compilation. The inspector writes `core-release/archive-members.tsv` and `core-release/archive-symbols.txt` through validated output paths.
