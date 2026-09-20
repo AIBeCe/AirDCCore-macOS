@@ -2,7 +2,8 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 . "$ROOT/tests/test_helper.sh"
-WORK=$(new_temp_dir)
+# /var is a macOS system symlink; archive report guards require a physical parent.
+WORK=$(TMPDIR=/private/tmp new_temp_dir)
 trap 'rm -rf -- "$WORK"' 0 1 2 15
 FAKE_BIN=$WORK/bin
 mkdir -p "$FAKE_BIN"
@@ -23,8 +24,12 @@ write_fake xcrun 'case "$*" in' \
   '"--find clang") echo /Applications/Xcode.app/usr/bin/clang ;;' \
   '"--find clang++") echo /Applications/Xcode.app/usr/bin/clang++ ;;' \
   '"--sdk macosx --show-sdk-path") echo /Applications/Xcode.app/MacOSX.sdk ;;' \
-  '"--sdk macosx --show-sdk-version") echo 26.5 ;; *) exit 64 ;; esac'
-write_fake python3 'echo "Python 3.14.7"'
+  '"--sdk macosx --show-sdk-version") echo 26.5 ;;' \
+  '"nm -g "*) exec /usr/bin/xcrun "$@" ;;' \
+  '*) exit 64 ;; esac'
+REAL_PYTHON=$(command -v python3)
+export REAL_PYTHON
+write_fake python3 'case "${1:-}" in --version) echo "Python 3.14.7" ;; *) exec "$REAL_PYTHON" "$@" ;; esac'
 write_fake brew 'case "$1:${2:-}" in' \
   '"--prefix:") echo /opt/homebrew ;;' \
   '--prefix:*) echo "/opt/homebrew/opt/$2" ;;' \
@@ -66,6 +71,7 @@ new_case() {
   git -C "$ROOT" ls-files -z | (cd "$ROOT" && xargs -0 tar -cf -) | tar -xf - -C "$CASE_ROOT"
   cp "$ROOT/scripts/build" "$CASE_ROOT/scripts/build"
   [ ! -f "$ROOT/scripts/lib/core_build.sh" ] || cp "$ROOT/scripts/lib/core_build.sh" "$CASE_ROOT/scripts/lib/core_build.sh"
+  [ ! -f "$ROOT/scripts/lib/inspect_core_archive.py" ] || cp "$ROOT/scripts/lib/inspect_core_archive.py" "$CASE_ROOT/scripts/lib/inspect_core_archive.py"
   printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' "$FIXTURE_URL" "$FIXTURE_PIN" > "$CASE_ROOT/config/upstream.env"
   git -C "$CASE_ROOT" init -q
   git -C "$CASE_ROOT" config user.name 'AirDCCore Tests'
@@ -96,6 +102,13 @@ assert_dir_absent "$CASE_ROOT/Dependencies"
 assert_line "$CASE_ROOT/Build/airdcpp-core/core-release/build-exit-code.txt" 0 'build exit'
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/first-build-state.txt"
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/build-inputs.txt"
+MEMBERS=$CASE_ROOT/Build/airdcpp-core/core-release/archive-members.tsv
+SYMBOLS=$CASE_ROOT/Build/airdcpp-core/core-release/archive-symbols.txt
+assert_file_present "$MEMBERS"
+assert_file_present "$SYMBOLS"
+assert_eq "$(wc -l < "$MEMBERS" | tr -d ' ')" 1 'one fixture archive member inspected'
+assert_contains "$(cat "$MEMBERS")" 'tiny.o' 'fixture member named in report'
+assert_contains "$(cat "$SYMBOLS")" '_air_dccore_fixture' 'fixture symbol inventory'
 output=$(run_core)
 assert_contains "$output" 'build: core archive candidate=' 'safe rerun'
 FAKE_CMAKE_VERSION=4.4.4; export FAKE_CMAKE_VERSION

@@ -111,7 +111,8 @@ EOF
   : > "$manifest"
   for field in first-build-state.txt build-inputs.txt host-inventory.txt \
       command.txt configure.log exit-code.txt cache.txt \
-      airdcpp-configure-summary.txt build-command.txt build.log build-exit-code.txt; do
+      airdcpp-configure-summary.txt build-command.txt build.log build-exit-code.txt \
+      archive-members.tsv archive-symbols.txt; do
     source=$CORE_OUTPUT/$field
     [ -e "$source" ] || continue
     [ -f "$source" ] && [ ! -L "$source" ] || core_die "attempt evidence is not a regular file: $field"
@@ -185,4 +186,11 @@ core_assert_scope
 archive=$CORE_OUTPUT/upstream/libairdcpp.a
 [ -f "$archive" ] && [ ! -L "$archive" ] && [ -s "$archive" ] ||
   core_die "Core target exited successfully without a regular nonempty archive: $archive"
+members=$CORE_OUTPUT/archive-members.tsv
+symbols=$CORE_OUTPUT/archive-symbols.txt
+prepare_inventory_output "$members"
+prepare_inventory_output "$symbols"
+python3 "$PROJECT_ROOT/scripts/lib/inspect_core_archive.py" "$archive" "$members" "$symbols" ||
+  core_die "Core archive member inspection failed: $archive"
+core_assert_scope
 printf 'build: core archive candidate=%s\n' "$archive"
