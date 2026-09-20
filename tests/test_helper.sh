@@ -22,8 +22,59 @@ assert_contains() {
   esac
 }
 
+assert_not_contains() {
+  haystack=$1
+  needle=$2
+  label=$3
+  case "$haystack" in
+    *"$needle"*) fail "$label: unexpected output containing [$needle]" ;;
+  esac
+}
+
+assert_dir_absent() { [ ! -d "$1" ] || fail "expected absent directory: $1"; }
+
+assert_line() {
+  file=$1
+  line=$2
+  label=$3
+  grep -Fqx -- "$line" "$file" || fail "$label: missing exact line [$line] in $file"
+}
+
 assert_file_absent() { [ ! -e "$1" ] || fail "expected absent path: $1"; }
 assert_file_present() { [ -e "$1" ] || fail "expected existing path: $1"; }
+
+# Shared by the real Gate 2 acceptance test and hermetic capture/path cases.
+assert_unmodified_capture() {
+  for field in command.txt inputs.txt exit-code.txt configure.log; do
+    assert_file_present "$BUILD/unmodified/$field"
+  done
+  comparison=$BUILD/unmodified/inputs.txt
+  if ! grep -q '^cmake.version=' "$comparison"; then
+    original_inputs=$(configure_original_inputs "$CHECKOUT") || fail 'failed to read original capture inputs'
+    preserved_inputs=$(cat "$comparison") || fail 'failed to read legacy capture inputs'
+    assert_eq "$preserved_inputs" "$original_inputs" 'legacy original capture inputs'
+    comparison=$BUILD/evidence/unmodified-reuse-inputs.txt
+    assert_file_present "$comparison"
+  fi
+  reuse_inputs=$(configure_reuse_inputs "$CHECKOUT" "$INVENTORY") || fail 'failed to read capture reuse inputs'
+  preserved_inputs=$(cat "$comparison") || fail 'failed to read preserved capture inputs'
+  assert_eq "$preserved_inputs" "$reuse_inputs" 'unmodified capture inputs do not match'
+}
+
+assert_formula_path() {
+  resolved_path=$1
+  resolved_formula=$2
+  [ -e "$resolved_path" ] || fail "$resolved_formula: missing resolved path $resolved_path"
+  formula_prefix=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix "$resolved_formula") || fail "$resolved_formula: failed to read Homebrew prefix"
+  assert_line "$INVENTORY" "formula.$resolved_formula.prefix=$formula_prefix" "$resolved_formula inventory prefix"
+  physical_prefix=$(CDPATH= cd -- "$formula_prefix" && pwd -P) || fail "$resolved_formula: failed to resolve Homebrew prefix"
+  physical_path=$(realpath "$resolved_path") || fail "$resolved_formula: failed to resolve complete path $resolved_path"
+  case "$physical_path" in
+    "$physical_prefix"|"$physical_prefix"/*) ;;
+    *) fail "$resolved_formula: path outside recorded Homebrew prefix: $resolved_path" ;;
+  esac
+}
+
 new_temp_dir() { mktemp -d "${TMPDIR:-/tmp}/airdc-core-tests.XXXXXX"; }
 
 create_remote_fixture() {

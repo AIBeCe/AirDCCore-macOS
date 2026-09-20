@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+if [ "$#" -ne 1 ] || [ "$1" != --configure-only ]; then
+  printf 'usage: scripts/build --configure-only\n' >&2
+  printf 'build: error: Phase 2 supports only --configure-only\n' >&2
+  exit 64
+fi
+PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+CHECKOUT=$PROJECT_ROOT/Source/airdcpp-core
+BUILD_ROOT=$PROJECT_ROOT/Build/airdcpp-core
+. "$PROJECT_ROOT/scripts/lib/upstream.sh"
+. "$PROJECT_ROOT/scripts/lib/configure.sh"
+load_upstream_config "$PROJECT_ROOT/config/upstream.env" || exit 1
+assert_supported_host
+validate_configure_checkout "$PROJECT_ROOT" "$CHECKOUT" "$AIRDCPP_CORE_COMMIT"
+missing=$(missing_required_formulae)
+[ -z "$missing" ] || configure_die "missing required Homebrew formulae:
+$missing
+install only these names with brew install"
+[ ! -L "$PROJECT_ROOT/Build" ] || configure_die 'refusing symlinked Build directory'
+mkdir -p "$PROJECT_ROOT/Build"
+[ ! -L "$BUILD_ROOT" ] || configure_die 'refusing symlinked Build/airdcpp-core'
+[ ! -e "$BUILD_ROOT" ] || [ -d "$BUILD_ROOT" ] || configure_die 'Build/airdcpp-core is not a directory'
+prepare_inventory_output "$BUILD_ROOT/evidence/host-inventory.txt"
+before_parent_status=$(configure_tree_snapshot "$PROJECT_ROOT") ||
+  configure_die 'failed to capture initial parent scope snapshot; inspect filesystem access before retrying'
+before_upstream_state=$(configure_upstream_snapshot "$CHECKOUT") ||
+  configure_die 'failed to capture initial upstream scope snapshot; inspect checkout access before retrying'
+cmake_prefix_path=$(dependency_cmake_prefix_path)
+pkg_config_path=$(dependency_pkg_config_path)
+prepare_unmodified_reuse_metadata "$PROJECT_ROOT"
+write_host_inventory "$BUILD_ROOT/evidence/host-inventory.txt"
+printf 'build: mode=configure-only source.commit=%s\n' "$AIRDCPP_CORE_COMMIT"
+printf 'build: architecture=arm64 deployment_target=14.0 build_type=Release static=ON C++20 libc++ NAT-PMP=OFF TBB=OFF\n'
+sed -n '/^clang\./p; /^homebrew.prefix=/p; /^formula\./p' "$BUILD_ROOT/evidence/host-inventory.txt"
+printf 'build: evidence=%s/evidence unmodified=%s/unmodified final=%s/release\n' "$BUILD_ROOT" "$BUILD_ROOT" "$BUILD_ROOT"
+capture_unmodified_configure "$PROJECT_ROOT" "$CHECKOUT" "$BUILD_ROOT/unmodified" "$cmake_prefix_path" "$pkg_config_path"
+# Scope is checked even if final discovery fails.
+wrapper_status=0
+run_wrapper_configure "$PROJECT_ROOT" "$BUILD_ROOT/release" "$cmake_prefix_path" "$pkg_config_path" || wrapper_status=$?
+assert_configure_scope "$PROJECT_ROOT" "$before_parent_status" "$before_upstream_state"
+[ "$wrapper_status" -eq 0 ] || exit "$wrapper_status"
+printf 'build: configure-only Gate 2 candidate succeeded; no compilation was invoked\n'
