@@ -1,8 +1,11 @@
 # Gate 4 Second Real-Link Failure
 
-**Date:** 2026-09-21  
-**Branch:** `feature/consumer-link-interface`  
-**Phase:** 4 — external consumer link-interface discovery  
+**Date:** 2026-09-21
+
+**Branch:** `feature/consumer-link-interface`
+
+**Phase:** 4 — external consumer link-interface discovery
+
 **Result:** Stopped before a third real-link run.
 
 ## Preserved state

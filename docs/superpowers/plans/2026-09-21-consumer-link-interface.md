@@ -58,7 +58,7 @@
 - Consumes: staged include root passed as `AIRDCCORE_INCLUDE_DIR`, staged archive passed as `AIRDCCORE_LIBRARY`, tracked module root passed as `AIRDCCORE_MODULE_DIR`, optional omission name `AIRDCCORE_OMIT_LINK_ITEM`.
 - Produces: CMake target `airdcpp-smoke`; stdout contract `AirDC++ Core <nonempty-version>\n`; CMake cache entries containing the selected Core inputs and omission.
 
-- [ ] **Step 1: Write the failing fixture-backed smoke test.**
+- [x] **Step 1: Write the failing fixture-backed smoke test.**
 
 Create `tests/smoke_consumer_test.sh` with a temporary staged include tree defining the real public signature, a fixture static archive defining it, and assertions that standalone CMake/Ninja can compile, link, and run the tracked source:
 
@@ -86,13 +86,13 @@ assert_eq "$("$WORK/build/airdcpp-smoke")" 'AirDC++ Core fixture' 'smoke output'
 
 Add negative cases for an absent archive, a symlinked archive, non-ARM64 CMake architecture, missing staged `airdcpp/stdinc.h`, and a fixture archive without `dcpp::getVersionTag()`.
 
-- [ ] **Step 2: Run RED and confirm the missing project is the cause.**
+- [x] **Step 2: Run RED and confirm the missing project is the cause.**
 
 Run: `./tests/smoke_consumer_test.sh`
 
 Expected: FAIL because `smoke-test/CMakeLists.txt` and `smoke-test/main.cpp` do not exist.
 
-- [ ] **Step 3: Implement the minimal deterministic consumer source.**
+- [x] **Step 3: Implement the minimal deterministic consumer source.**
 
 Create `smoke-test/main.cpp`:
 
@@ -116,13 +116,13 @@ int main() {
 
 Create `smoke-test/CMakeLists.txt` as a standalone project. Require all inputs to be absolute, regular, non-symlinked paths; reject architecture other than exactly `arm64`; create imported target `AirDCCore::Core`; apply `target_link_options(airdcpp-smoke PRIVATE "LINKER:-force_load,$<TARGET_FILE:AirDCCore::Core>")`; link the explicit dependency target list unless its logical name equals `AIRDCCORE_OMIT_LINK_ITEM`. `AIRDCCORE_TEST_LINK_ITEMS=fixture` must skip package discovery only for the isolated fixture and still link the imported Core archive.
 
-- [ ] **Step 4: Run GREEN and prove the symbol is not header-only.**
+- [x] **Step 4: Run GREEN and prove the symbol is not header-only.**
 
 Run: `./tests/smoke_consumer_test.sh`
 
 Expected: PASS; the no-Core and no-symbol cases fail during link, and the valid fixture prints exactly `AirDC++ Core fixture`.
 
-- [ ] **Step 5: Commit the standalone consumer.**
+- [x] **Step 5: Commit the standalone consumer.**
 
 ```sh
 git add smoke-test/main.cpp smoke-test/CMakeLists.txt tests/smoke_consumer_test.sh
@@ -140,7 +140,7 @@ git commit -m "test: add real-symbol external Core consumer"
 - Consumes: Phase 3 `core-release` evidence, pinned checkout, `smoke-test`, and the configuration helpers in `scripts/lib/configure.sh`.
 - Produces: ignored `Build/airdcpp-core/link-interface/stage`, `core-only`, `full`, `omissions`, `run`, `header-manifest.sha256`, `input-manifest.txt`, and exact status/log files.
 
-- [ ] **Step 1: Write failing orchestration tests using fake tools and a real tiny ARM64 archive.**
+- [x] **Step 1: Write failing orchestration tests using fake tools and a real tiny ARM64 archive.**
 
 In `tests/link_consumer_test.sh`, copy tracked files into isolated cases, construct a detached pinned fixture checkout with `airdcpp/core/version.h`, and create a Gate 3-shaped candidate. Assert:
 
@@ -156,13 +156,13 @@ assert_dir_absent "$CASE_ROOT/Dependencies"
 
 Add cases proving rejection of wrong upstream HEAD/origin, changed archive hash/member report, missing Gate 3 evidence, symlinked `Source`, `Build`, `Build/airdcpp-core`, `link-interface`, stage header/archive/output, and mutation of a Gate 2/Core sibling. Assert a rerun with identical inputs preserves the previous attempt under a sequential hash-checked attempt directory before replacing current logs.
 
-- [ ] **Step 2: Run RED and confirm the unsupported mode is the cause.**
+- [x] **Step 2: Run RED and confirm the unsupported mode is the cause.**
 
 Run: `./tests/link_consumer_test.sh`
 
 Expected: FAIL with `unsupported build mode: --link-consumer`.
 
-- [ ] **Step 3: Add exact dispatch and safe validation.**
+- [x] **Step 3: Add exact dispatch and safe validation.**
 
 Extend the usage to `scripts/build (--configure-only|--build-core|--link-consumer)` and dispatch only exact `--link-consumer` to `/bin/sh "$PROJECT_ROOT/scripts/lib/link_consumer.sh" "$PROJECT_ROOT"`.
 
@@ -183,11 +183,11 @@ enable_natpmp=OFF
 enable_tbb=OFF
 ```
 
-- [ ] **Step 4: Add deterministic attempt preservation and command capture.**
+- [x] **Step 4: Add deterministic attempt preservation and command capture.**
 
 For each `core-only`, `full`, and omission case, capture `configure-command.txt`, `configure.log`, `configure-exit-code.txt`, `build-command.txt`, `build.log`, and `build-exit-code.txt`. Before a rerun, require every expected file to be regular/non-symlinked, build a complete SHA-256 manifest, atomically move the prior record into `attempts/0001`, `0002`, and so on, and reject gaps, extra files, or digest changes. Scope checks run on success and failure.
 
-- [ ] **Step 5: Run GREEN and the existing offline regression suite.**
+- [x] **Step 5: Run GREEN and the existing offline regression suite.**
 
 Run:
 
@@ -204,7 +204,7 @@ python3 -m unittest tests/archive_inspect_test.py -v
 
 Expected: all PASS; no live Core rebuild or consumer link occurs in offline tests.
 
-- [ ] **Step 6: Commit staging/orchestration.**
+- [x] **Step 6: Commit staging/orchestration.**
 
 ```sh
 git add scripts/build scripts/lib/link_consumer.sh tests/link_consumer_test.sh
@@ -223,7 +223,7 @@ git commit -m "feat: stage isolated Core consumer inputs"
 - Consumes: staged inputs from Task 2; logical candidate order `BZip2`, `ZLIB`, `OpenSSLSSL`, `OpenSSLCrypto`, `miniupnpc`, `leveldb`, `maxminddb`, `BoostThread`, `BoostRegex`, `Snappy`, `Threads`, `Iconv`.
 - Produces: `core-undefined.txt`, `link-command.raw.txt`, `link-interface.tsv`, `omission-results.tsv`, `otool-load-commands.txt`, `binary-file.txt`, `binary-arch.txt`, and runnable `full/airdcpp-smoke`.
 
-- [ ] **Step 1: Write parser and orchestration RED tests.**
+- [x] **Step 1: Write parser and orchestration RED tests.**
 
 In `tests/link_evidence_test.py`, feed a fixture verbose link command containing quoted paths with spaces, repeated transitive libraries, `-framework` pairs, `-lSystem`, and project-root paths. Require normalized ordered rows:
 
@@ -236,7 +236,7 @@ In `tests/link_evidence_test.py`, feed a fixture verbose link command containing
 
 Assert duplicate physical libraries collapse to their first effective position, malformed framework pairs fail without publishing output, and `$PROJECT_ROOT` replaces the exact project root only (not similarly prefixed paths). In `tests/link_consumer_test.sh`, require the fake Core-only force-load to exit nonzero and remain preserved, the full case to succeed, each logical omission to emit one row, and a second minimization pass to use only items whose omission failed.
 
-- [ ] **Step 2: Run RED and confirm missing evidence logic.**
+- [x] **Step 2: Run RED and confirm missing evidence logic.**
 
 Run:
 
@@ -247,7 +247,7 @@ python3 -m unittest tests/link_evidence_test.py -v
 
 Expected: FAIL because the normalizer and closure loop do not exist.
 
-- [ ] **Step 3: Implement Core-only, full, and omission experiments.**
+- [x] **Step 3: Implement Core-only, full, and omission experiments.**
 
 The first actual link must configure the smoke project with Core force-load and no dependency targets, then build once. Require a nonzero linker exit and at least one undefined-symbol diagnostic; if it succeeds or fails for another reason, preserve evidence and stop for review.
 
@@ -255,7 +255,7 @@ Configure the full candidate with the twelve explicit imported targets in upstre
 
 After the first omission pass, rebuild from a list containing only `required` items plus targets proven to supply `transitive` items. Repeat omissions against that reduced list. The fixed-point list is the Gate 4 candidate; preserve its exact order and fail if another pass changes the classification.
 
-- [ ] **Step 4: Implement stable evidence normalization and runtime inspection.**
+- [x] **Step 4: Implement stable evidence normalization and runtime inspection.**
 
 `normalize_link_evidence.py` accepts `--project-root`, `--command`, `--omissions`, and `--output`. Parse arguments without shell evaluation, pair `-framework` with its following name, retain archive/library/system order, normalize only the exact project root, and publish atomically after complete validation. The shell driver additionally records:
 
@@ -270,7 +270,7 @@ printf '%s\n' "$?" > run/exit-code.txt
 
 Require `arm64`, exit `0`, empty stderr, stdout beginning with `AirDC++ Core ` and a nonempty suffix, and no `Source`, `Build`, worktree root, or user-home string in `strings` output or `otool` load commands. Record Homebrew dylibs as Phase 4 discovery dependencies, not acceptable final `Dist` inputs.
 
-- [ ] **Step 5: Run unit/offline GREEN.**
+- [x] **Step 5: Run unit/offline GREEN.**
 
 Run:
 
@@ -282,7 +282,7 @@ python3 -m unittest tests/link_evidence_test.py -v
 
 Expected: all PASS, including fixed-point ordering and every Review Focus failure.
 
-- [ ] **Step 6: Run the real link experiment and stop on unexpected evidence.**
+- [x] **Step 6: Run the real link experiment and stop on unexpected evidence.**
 
 Pre-check the archive hash equals `f345fe0e5fc7bbf289642e5a8846795f0e0d177288505419b0ba96cc23367441`, produced by the approved source-prefix-map Gate 3 amendment. The previous candidate hash `0bc3cc3c9a4424bbceb0bd2c1682e963ecd388b0bacc6acb3c0575aaa8e464e7` remains preserved under Gate 3 attempt evidence. Then run:
 
@@ -292,7 +292,7 @@ Pre-check the archive hash equals `f345fe0e5fc7bbf289642e5a8846795f0e0d177288505
 
 Expected: Core-only force-load fails solely with unresolved symbols; the full and fixed-point links succeed; the executable is `arm64`, runs without network, and produces the declared output. If any assumption differs, preserve raw evidence, write a short failure report under `docs/reports`, and stop for an approved plan amendment before retrying.
 
-- [ ] **Step 7: Commit measured closure implementation.**
+- [x] **Step 7: Commit measured closure implementation.**
 
 ```sh
 git add scripts/lib/link_consumer.sh scripts/lib/normalize_link_evidence.py \
@@ -315,13 +315,13 @@ git commit -m "feat: discover external Core link closure"
 - Consumes: actual ignored Gate 4 evidence and executable from Task 3.
 - Produces: reviewed Gate 4 decision and stable operator commands; no package, `Dist`, dependency lock, or distribution-shape ADR.
 
-- [ ] **Step 1: Write the opt-in live gate and copied-evidence RED contract.**
+- [x] **Step 1: Write the opt-in live gate and copied-evidence RED contract.**
 
 `tests/gate4_consumer_link_test.sh` must refuse before inspection unless `AIRDCCORE_RUN_LINK_TESTS=1`. Once enabled it independently verifies pin/origin/clean source, Phase 3 archive/member hashes, staged manifest, Core-only unresolved-symbol failure, fixed-point omission matrix, exact normalized closure, regular non-symlinked executable, `file`/`lipo` arm64, `otool -L`, real-symbol presence, runtime output/status, absence of `Dist`/`Dependencies`, no tracked generated paths, and unchanged parent/source/Gate 2/Gate 3 snapshots.
 
 `tests/gate4_contract_test.sh` copies evidence into `/private/tmp`, then proves rejection of: disabled opt-in, wrong pin, changed archive, missing staged header, malformed omission row, reordered normalized link item, x86_64 executable, wrong runtime output, injected artifact path leak, and mutation during verification.
 
-- [ ] **Step 2: Run RED and confirm only the missing tracked report blocks the live gate after syntax checks.**
+- [x] **Step 2: Run RED and confirm only the missing tracked report blocks the live gate after syntax checks.**
 
 Run:
 
@@ -332,7 +332,7 @@ AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_consumer_link_test.sh
 
 Expected: syntax passes; live gate fails because `docs/reports/2026-09-21-gate-4-consumer-link.md` is absent.
 
-- [ ] **Step 3: Write the measured report and concise documentation.**
+- [x] **Step 3: Write the measured report and concise documentation.**
 
 The report records exact source/archive identity, staged header count/hash, smoke source and invoked symbol, Core-only unresolved-symbol result, full and fixed-point commands with `$PROJECT_ROOT` normalization, omission matrix, final ordered link interface, frameworks/system libraries, executable format/architecture/hash, `otool` load commands, stdout/status, Homebrew paths requiring Phase 6 disposition, warnings, and explicit non-claims. State that Gate 4 does not choose an artifact shape, pin dependencies, package headers/libraries, create `Dist`, prove two-clean-build reproducibility, or resolve the `HashStore.cpp:404` safety issue.
 
@@ -347,7 +347,7 @@ AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_consumer_link_test.sh
 
 Explain that an already-verified Gate 3 candidate is reused; `--link-consumer` does not rebuild Core and creates no distributable output.
 
-- [ ] **Step 4: Run complete GREEN verification.**
+- [x] **Step 4: Run complete GREEN verification.**
 
 Run:
 
@@ -369,11 +369,11 @@ git ls-files Source Dependencies Build Dist
 
 Expected: all suites PASS; final command prints nothing. Inspect `git status --ignored --short` and require ignored output only under approved `Source`, `Build`, Python cache, and SDD ledger paths.
 
-- [ ] **Step 5: Request one independent whole-branch review.**
+- [x] **Step 5: Request one independent whole-branch review.**
 
 Review `develop..feature/consumer-link-interface` against the spec, raw evidence, and these points: externality of the consumer, all-member force-load, omission fixed point, path-leak scan, source/evidence immutability, runtime determinism, and strict Phase 4 boundary. Important or Critical findings receive one TDD fix pass and full verification; Minor findings are either fixed if low risk or recorded with rationale.
 
-- [ ] **Step 6: Commit Gate 4 and stop before Phase 5.**
+- [x] **Step 6: Commit Gate 4 and stop before Phase 5.**
 
 ```sh
 git add README.md docs/architecture.md docs/build-and-release.md \

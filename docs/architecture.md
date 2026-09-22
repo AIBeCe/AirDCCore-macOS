@@ -28,7 +28,7 @@ versioned pins + tracked patches
 
 ## Stable interface
 
-The stable user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Acquisition and `scripts/build --configure-only` are implemented; compilation, verification, and cleaning entry-point workflows remain deferred.
+The stable user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Acquisition plus `scripts/build --configure-only`, `--build-core`, and `--link-consumer` are implemented. Packaging, the final verification entry point, and cleaning remain deferred.
 
 `Dist` is the only published output boundary. Consumers must not depend on `Build`, Homebrew paths, or the upstream checkout.
 
@@ -44,4 +44,20 @@ scripts/build -> scripts/lib/configure.sh -> wrapper/toolchain -> unmodified Sou
 
 The wrapper nests the pinned checkout without patching it, supplies missing parent check modules/contracts, and applies Release/static Core/C++20/arm64/libc++/deployment-14.0 policy. Homebrew package adapters are narrow discovery shims; imported dependencies may be shared libraries even though Core policy is static.
 
-All raw configure output, inventory, cache, summary, and compiler/check probes live below `Build/airdcpp-core`. Historical unmodified and wrapper-only attempts are immutable; reruns refresh only the final release configuration and host inventory. Only the [normalized Gate 2 report](reports/2026-09-05-gate-2-native-configure.md) is tracked. Scope snapshots reject source mutation, outside-output changes, Core build products, and `Dependencies`/`Dist` creation. Generating `build.ninja` does not execute it. The flow stops before Phase 3 compilation and does not implement the future publication flow above.
+All raw configure output, inventory, cache, summary, and compiler/check probes live below `Build/airdcpp-core`. Historical unmodified and wrapper-only attempts are immutable; reruns refresh only the final release configuration and host inventory. Only the [normalized Gate 2 report](reports/2026-09-05-gate-2-native-configure.md) is tracked. Scope snapshots reject source mutation, outside-output changes, Core build products, and `Dependencies`/`Dist` creation. Generating `build.ninja` does not execute it.
+
+## Implemented Phase 3 and Phase 4 flow
+
+```text
+Source/airdcpp-core -> wrapper policy -> core-release/libairdcpp.a
+                                              |
+                                              v
+tracked smoke-test <- staged headers + archive <- link-interface
+                                              |
+                                              v
+                           force-loaded ARM64 executable + closure evidence
+```
+
+Phase 3 applies the fixed Apple Clang/Release/C++20/arm64/deployment-14.0 policy and a deterministic source prefix-map without editing upstream. It produces an ignored archive plus independently regenerated member, symbol, string, table, and checksum evidence.
+
+Phase 4 copies only validated headers and the exact archive into an ignored stage. Its standalone CMake project never imports upstream CMake. It first proves the force-loaded Core archive is not self-contained, then measures direct and transitive dependencies through two omission passes and runs the resulting executable. The [Gate 4 report](reports/2026-09-21-gate-4-consumer-link.md) is the tracked result. This flow does not choose the future `Dist/lib` shape or turn current Homebrew paths into publication dependencies.

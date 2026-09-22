@@ -1,8 +1,11 @@
 # Gate 4 Embedded Path Failure
 
-**Date:** 2026-09-21  
-**Branch:** `feature/consumer-link-interface`  
-**Phase:** 4 — external consumer link-interface discovery  
+**Date:** 2026-09-21
+
+**Branch:** `feature/consumer-link-interface`
+
+**Phase:** 4 — external consumer link-interface discovery
+
 **Result:** Link and runtime passed; embedded-path verification stopped Gate 4.
 
 ## What passed

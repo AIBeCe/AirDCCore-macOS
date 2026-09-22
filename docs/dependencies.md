@@ -57,10 +57,18 @@ No Phase 2 formula becomes a publication dependency or a `Dependencies` source p
 
 ## Gate 3 build observation
 
-The first ARM64 static Core build used the same measured Homebrew formula inventory (SHA-256 `7245d0f1b75d587823e0dd102187f4aef22e3e3fc4fd5ab73457353657bc18d1`). The [Gate 3 report](reports/2026-09-20-gate-3-arm64-core-build.md) records the 13,202,464-byte archive, exact source pin, all 130 ARM64 object checks, and the current imported target locations. A static `libairdcpp.a` does not absorb these imported libraries: ZLIB, OpenSSL, miniupnpc, LevelDB, MaxMindDB, Boost, Snappy, and Iconv currently resolve to Homebrew dylibs, while BZip2 resolves to a static archive and Threads to an SDK interface. This observation is not a final consumer link line.
+The ARM64 static Core build used the same measured Homebrew formula inventory (SHA-256 `7245d0f1b75d587823e0dd102187f4aef22e3e3fc4fd5ab73457353657bc18d1`). The [Gate 3 report](reports/2026-09-20-gate-3-arm64-core-build.md) records the amended 13,202,392-byte archive, exact source pin, all 130 ARM64 object checks, and current imported-target locations. A static `libairdcpp.a` does not absorb these imported libraries.
 
-Homebrew LevelDB 1.23_2 exports `-Werror;-Wthread-safety` as its CMake target's compile interface. The Phase 3 wrapper removes only that transitive `-Werror` for the first Core build; the remaining upstream `HashStore.cpp:404` warning and its possible unchecked database-key length are **not** resolved by this adapter. Phase 4 must discover actual unresolved symbols and link order; later publication work must decide how to fix upstream compatibility/safety issues and pin distributable dependency inputs.
+Homebrew LevelDB 1.23_2 exports `-Werror;-Wthread-safety` as its CMake target's compile interface. The Phase 3 wrapper removes only that transitive `-Werror`; the remaining upstream `HashStore.cpp:404` warning and its possible unchecked database-key length are **not** resolved by this adapter.
+
+## Gate 4 measured link closure
+
+The [Gate 4 report](reports/2026-09-21-gate-4-consumer-link.md) records a real all-member force-loaded external consumer. The stable direct logical items are BZip2, ZLIB, OpenSSL SSL, miniupnpc, LevelDB, MaxMindDB, and system Iconv. OpenSSL Crypto and Snappy remain physical transitive link items supplied by retained targets; Boost thread/regex and Threads are not direct fixed-point items for this consumer. No Apple framework was required.
+
+The measured physical interface still contains Homebrew BZip2 plus Homebrew zlib, OpenSSL, miniupnpc, LevelDB, MaxMindDB, and Snappy. The archive was compiled against the macOS iconv ABI, so Gate 4 uses the active SDK `libiconv.tbd` and the executable loads `/usr/lib/libiconv.2.dylib`; Homebrew GNU libiconv is not the correct ABI for this candidate. A narrow adapter also maps LevelDB's incomplete plain `snappy` metadata to the exact `Snappy::snappy` target.
+
+The Homebrew objects and dylibs emit linker warnings because they were built for macOS 26.0 while the consumer deployment target is 14.0. They prove discovery and link closure only. Phase 6 must pin or rebuild every non-system input and establish the intended minimum-macOS policy before publication.
 
 ## Evidence still required
 
-The first ARM64 link-closure experiment must determine dependency versions, static/shared availability, archive link order, Apple frameworks/system libraries, whether Boost thread introduces Boost system, and whether optional NAT-PMP/TBB are part of the supported feature set. WebSocket++ source acquisition remains deferred unless later evidence makes it a core dependency.
+Phase 5 must choose the evidence-backed distribution shape. Phase 6 must determine pinned source/package inputs, static/shared availability, licenses, minimum-macOS compatibility, and final archive/link ordering. NAT-PMP and TBB remain deliberately OFF; WebSocket++ source acquisition remains deferred unless later evidence makes it a Core dependency.

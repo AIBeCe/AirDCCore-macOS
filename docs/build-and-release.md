@@ -2,7 +2,7 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-Acquisition, native configure-only discovery, and an unpackaged ARM64 static Core build are implemented. Consumer linking, packaging, and release workflows remain deferred.
+Acquisition, native configure-only discovery, an unpackaged ARM64 static Core build, and external-consumer link discovery are implemented. Distribution-shape selection, pinned dependency builds, packaging, and release workflows remain deferred.
 
 ## Required sequence
 
@@ -43,7 +43,22 @@ On native macOS `arm64`, after `./scripts/update`, run `./scripts/build --build-
 
 After a successful build, run `AIRDCCORE_RUN_BUILD_TESTS=1 ./tests/gate3_core_build_test.sh`. Without the variable, the live gate refuses immediately. It verifies source identity, build/configure policy and evidence, each archive object via an independent read-only reinspection, the archive-level `file`/`lipo`/`nm` results, generated-file and Git boundaries, and absence of `Dist`. `AIRDCCORE_RUN_BUILD_TESTS=1 ./tests/gate3_contract_test.sh` tests rejection paths against copied evidence without mutating the real archive. The [Gate 3 report](reports/2026-09-20-gate-3-arm64-core-build.md) gives measured results and the first-attempt correction.
 
-Gate 3 is **not** a link or release gate. The archive may contain unresolved external references, and its Homebrew-sourced dependencies include dylibs. A real external C++ consumer link, public-header packaging decision, dependency closure, reproducibility, and all distribution work remain later phases. The upstream `HashStore.cpp:404` warning and possible key-length bounds issue remain open publication risks.
+Gate 3 is **not** a link or release gate. The archive contains unresolved external references, and its Homebrew-sourced dependencies include dylibs. The upstream `HashStore.cpp:404` warning and possible key-length bounds issue remain open publication risks.
+
+## Gate 4 operator contract
+
+After Gate 3 has produced and verified the current archive, run:
+
+```sh
+./scripts/build --link-consumer
+AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_consumer_link_test.sh
+```
+
+`--link-consumer` validates the pinned checkout and Gate 3 evidence, stages a hash-bound header tree and byte-identical archive, and compiles a standalone C++20 smoke executable. It does not invoke the Core build target. The archive is force-loaded so every Core object participates. A Core-only link must fail with unresolved symbols; the Homebrew-assisted candidate is reduced through two one-at-a-time omission passes to a stable seven-item logical interface. Commands, logs, attempts, manifests, omission results, normalized link items, binary inspection, and runtime output remain ignored below `Build/airdcpp-core/link-interface`.
+
+The live gate refuses unless `AIRDCCORE_RUN_LINK_TESTS=1`. It independently verifies source and archive identity, the staged manifest, expected Core-only failure, exact omission fixed point, ordered link interface, ARM64 Mach-O executable, real Core symbols, runtime commit identity, and absence of worktree/home/absolute Source or Build paths. `AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_contract_test.sh` exercises rejection paths against copied evidence. The [Gate 4 report](reports/2026-09-21-gate-4-consumer-link.md) records the measured result.
+
+Hard stop: Gate 4 does not create a distributable, choose one-versus-many archive layout, pin Homebrew dependencies, prove macOS 14 compatibility, or authorize Phase 5. `Dependencies` and `Dist` remain absent.
 
 ## Release evidence
 

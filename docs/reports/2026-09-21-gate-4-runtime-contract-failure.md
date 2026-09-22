@@ -1,8 +1,11 @@
 # Gate 4 Runtime Contract Failure
 
-**Date:** 2026-09-21  
-**Branch:** `feature/consumer-link-interface`  
-**Phase:** 4 — external consumer link-interface discovery  
+**Date:** 2026-09-21
+
+**Branch:** `feature/consumer-link-interface`
+
+**Phase:** 4 — external consumer link-interface discovery
+
 **Result:** Link closure reached a fixed point; runtime contract stopped Gate 4.
 
 ## What passed

@@ -1,8 +1,11 @@
 # Gate 4 First Real-Link Failure
 
-**Date:** 2026-09-21  
-**Branch:** `feature/consumer-link-interface`  
-**Phase:** 4 — external consumer link-interface discovery  
+**Date:** 2026-09-21
+
+**Branch:** `feature/consumer-link-interface`
+
+**Phase:** 4 — external consumer link-interface discovery
+
 **Result:** Stopped before retry, as required by the Phase 4 plan.
 
 ## Preserved input
