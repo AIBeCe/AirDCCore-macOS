@@ -2,7 +2,7 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-Acquisition, native configure-only discovery, an unpackaged ARM64 static Core build, and external-consumer link discovery are implemented. Distribution-shape selection, pinned dependency builds, packaging, and release workflows remain deferred.
+Acquisition, native configure-only discovery, an unpackaged ARM64 static Core build, external-consumer link discovery, and the distribution-shape decision are implemented. Pinned dependency builds, aggregation, packaging, and release workflows remain deferred.
 
 ## Required sequence
 
@@ -10,7 +10,7 @@ Acquisition, native configure-only discovery, an unpackaged ARM64 static Core bu
 2. **Discover:** use Homebrew-assisted host tooling and dependency discovery for native configure-only feasibility evidence; stop before Core compilation.
 3. **Build core:** configure Release with Apple Clang/libc++, `BUILD_SHARED_LIBS=OFF`, and `CMAKE_OSX_ARCHITECTURES=arm64`.
 4. **Close the link:** inspect unresolved symbols and link a real external C++ program. Record every required archive, framework, and system library.
-5. **Choose distribution shape:** decide from evidence whether `Dist/lib` contains one archive, multiple archives plus an explicit link interface, or an aggregate artifact.
+5. **Choose distribution shape:** accepted — publish one aggregate `Dist/lib/libairdcpp.a` with per-component metadata and an explicit Apple system-link interface.
 6. **Reproduce dependencies:** replace mutable Homebrew runtime assumptions with pinned source builds or pinned packaged archives wherever publication requires it.
 7. **Package:** stage headers, libraries, metadata, checksums, and license material into `Dist` only after all preceding gates pass.
 8. **Verify and release:** run architecture, symbol, header, link, provenance, cleanliness, and two-clean-build reproducibility checks.
@@ -59,6 +59,18 @@ AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_consumer_link_test.sh
 The live gate refuses unless `AIRDCCORE_RUN_LINK_TESTS=1`. It independently verifies source and archive identity, the staged manifest, expected Core-only failure, exact omission fixed point, ordered link interface, ARM64 Mach-O executable, real Core symbols, runtime commit identity, and absence of worktree/home/absolute Source or Build paths. `AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_contract_test.sh` exercises rejection paths against copied evidence. The [Gate 4 report](reports/2026-09-21-gate-4-consumer-link.md) records the measured result.
 
 Hard stop: Gate 4 does not create a distributable, choose one-versus-many archive layout, pin Homebrew dependencies, prove macOS 14 compatibility, or authorize Phase 5. `Dependencies` and `Dist` remain absent.
+
+## Gate 5 operator contract
+
+Run the offline decision gate:
+
+```sh
+./tests/gate5_distribution_shape_test.sh
+```
+
+The gate validates [ADR 0001](decisions/0001-aggregate-static-distribution.md): exact aggregate contents, explicit-versus-implicit SDK/system link modes, deterministic strong-collision-safe construction with classified weak/coalesced definitions, per-component provenance and licenses, rejected alternatives, and Phase 6 non-claims. It also verifies that source/build/distribution paths remain untracked and that neither `Dependencies` nor `Dist` exists or is a symlink.
+
+Hard stop: Gate 5 is documentation and contract evidence only. It does not download or build dependencies, create the aggregate, prove minimum-macOS compatibility, complete license review, package headers, or create `Dist`. Phase 6 starts with pinned reconstruction of the nine non-system components named by the ADR.
 
 ## Release evidence
 

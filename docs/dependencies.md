@@ -69,6 +69,8 @@ The measured physical interface still contains Homebrew BZip2 plus Homebrew zlib
 
 The Homebrew objects and dylibs emit linker warnings because they were built for macOS 26.0 while the consumer deployment target is 14.0. They prove discovery and link closure only. Phase 6 must pin or rebuild every non-system input and establish the intended minimum-macOS policy before publication.
 
-## Evidence still required
+## Gate 5 distribution decision and evidence still required
 
-Phase 5 must choose the evidence-backed distribution shape. Phase 6 must determine pinned source/package inputs, static/shared availability, licenses, minimum-macOS compatibility, and final archive/link ordering. NAT-PMP and TBB remain deliberately OFF; WebSocket++ source acquisition remains deferred unless later evidence makes it a Core dependency.
+[ADR 0001](decisions/0001-aggregate-static-distribution.md) selects a single future aggregate archive. Its non-system component set is Core, BZip2, zlib, OpenSSL SSL and Crypto, miniupnpc, LevelDB, MaxMindDB, and Snappy. SDK Iconv remains an explicit external link input; libc++ and libSystem remain implicit Apple toolchain load commands. Gate 4 measured no Apple framework requirement.
+
+Phase 6 must determine pinned source/package inputs, static availability, checksums, licenses, build flags and patches, minimum-macOS compatibility, canonical component/member ordering, duplicate strong-symbol rejection, and weak/coalesced-symbol classification for that exact closure. The Homebrew inventory remains discovery evidence only. NAT-PMP and TBB remain deliberately OFF; WebSocket++ source acquisition remains deferred unless later evidence makes it a Core dependency.
