@@ -12,6 +12,23 @@ function(airdcpp_require_value name actual expected)
   endif()
 endfunction()
 
+function(airdcpp_apply_source_prefix_map target source replacement)
+  if(NOT TARGET "${target}")
+    message(FATAL_ERROR "source prefix-map target does not exist: ${target}")
+  endif()
+  if(NOT IS_ABSOLUTE "${source}")
+    message(FATAL_ERROR "source prefix-map source must be absolute: ${source}")
+  endif()
+  if("${source}" MATCHES "[;\n\r]" OR
+      "${replacement}" STREQUAL "" OR
+      IS_ABSOLUTE "${replacement}" OR
+      "${replacement}" MATCHES "[;\n\r]")
+    message(FATAL_ERROR "invalid source prefix-map: ${source}=${replacement}")
+  endif()
+  target_compile_options("${target}" PRIVATE
+    "-ffile-prefix-map=${source}=${replacement}")
+endfunction()
+
 function(airdcpp_record_target target output)
   set(target_exists FALSE)
   set(target_type "")

@@ -32,7 +32,8 @@ REAL_BUILD=$ROOT/Build/airdcpp-core/core-release
 BUILD=$CASE/Build/airdcpp-core/core-release
 for evidence in first-build-state.txt build-inputs.txt host-inventory.txt command.txt \
     configure.log cache.txt CMakeCache.txt airdcpp-configure-summary.txt \
-    build.log build-exit-code.txt archive-members.tsv archive-symbols.txt .ninja_log; do
+    build.log build-exit-code.txt archive-members.tsv archive-symbols.txt \
+    archive-strings.txt archive-ar-table.txt archive-sha256.txt .ninja_log; do
   cp "$REAL_BUILD/$evidence" "$BUILD/$evidence"
 done
 sed "s|$ROOT|$CASE|g" "$REAL_BUILD/build-command.txt" > "$BUILD/build-command.txt"
@@ -71,6 +72,29 @@ awk -F '\t' 'BEGIN {OFS="\t"} NR==1 {$3="000000000000000000000000000000000000000
   "$REAL_BUILD/archive-members.tsv" > "$BUILD/archive-members.tsv"
 expect_gate_failure 'archive member report differs' run_gate
 cp "$REAL_BUILD/archive-members.tsv" "$BUILD/archive-members.tsv"
+
+cp "$BUILD/upstream/libairdcpp.a" "$WORK/valid-libairdcpp.a"
+cp "$BUILD/archive-members.tsv" "$WORK/valid-archive-members.tsv"
+cp "$BUILD/archive-symbols.txt" "$WORK/valid-archive-symbols.txt"
+cp "$BUILD/archive-strings.txt" "$WORK/valid-archive-strings.txt"
+cp "$BUILD/archive-ar-table.txt" "$WORK/valid-archive-ar-table.txt"
+cp "$BUILD/archive-sha256.txt" "$WORK/valid-archive-sha256.txt"
+printf '%s\n' 'const char *leaked_path(void) { return "/Users/example/Source/airdcpp-core/file.cpp"; }' \
+  > "$WORK/leak.c"
+xcrun clang -arch arm64 -c "$WORK/leak.c" -o "$WORK/leak.o"
+/usr/bin/ar rcs "$BUILD/upstream/libairdcpp.a" "$WORK/leak.o"
+python3 "$ROOT/scripts/lib/inspect_core_archive.py" "$BUILD/upstream/libairdcpp.a" \
+  "$BUILD/archive-members.tsv" "$BUILD/archive-symbols.txt"
+/usr/bin/strings "$BUILD/upstream/libairdcpp.a" > "$BUILD/archive-strings.txt"
+(cd "$BUILD" && shasum -a 256 upstream/libairdcpp.a) > "$BUILD/archive-sha256.txt"
+/usr/bin/ar -t "$BUILD/upstream/libairdcpp.a" > "$BUILD/archive-ar-table.txt"
+expect_gate_failure 'archive contains an absolute home, Source, or Build path' run_gate
+cp "$WORK/valid-libairdcpp.a" "$BUILD/upstream/libairdcpp.a"
+cp "$WORK/valid-archive-members.tsv" "$BUILD/archive-members.tsv"
+cp "$WORK/valid-archive-symbols.txt" "$BUILD/archive-symbols.txt"
+cp "$WORK/valid-archive-strings.txt" "$BUILD/archive-strings.txt"
+cp "$WORK/valid-archive-ar-table.txt" "$BUILD/archive-ar-table.txt"
+cp "$WORK/valid-archive-sha256.txt" "$BUILD/archive-sha256.txt"
 
 REAL_PYTHON=$(command -v python3)
 export REAL_PYTHON

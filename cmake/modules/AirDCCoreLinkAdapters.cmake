@@ -1,0 +1,51 @@
+function(airdcpp_adapt_leveldb_snappy)
+  if(NOT TARGET leveldb::leveldb)
+    message(FATAL_ERROR "leveldb::leveldb target is required for the LevelDB Snappy adapter")
+  endif()
+  if(NOT TARGET Snappy::snappy)
+    message(FATAL_ERROR "Snappy::snappy target is required for the LevelDB Snappy adapter")
+  endif()
+
+  get_target_property(leveldb_link_items leveldb::leveldb INTERFACE_LINK_LIBRARIES)
+  if(leveldb_link_items STREQUAL "leveldb_link_items-NOTFOUND")
+    set(leveldb_link_items)
+  endif()
+
+  set(repaired_link_items)
+  set(plain_snappy_count 0)
+  foreach(link_item IN LISTS leveldb_link_items)
+    if(link_item STREQUAL "snappy")
+      math(EXPR plain_snappy_count "${plain_snappy_count} + 1")
+      list(APPEND repaired_link_items Snappy::snappy)
+    else()
+      list(APPEND repaired_link_items "${link_item}")
+    endif()
+  endforeach()
+
+  if(NOT plain_snappy_count EQUAL 1)
+    message(FATAL_ERROR
+      "leveldb::leveldb expected exactly one plain snappy item; found ${plain_snappy_count}")
+  endif()
+
+  set_property(TARGET leveldb::leveldb PROPERTY
+    INTERFACE_LINK_LIBRARIES "${repaired_link_items}")
+endfunction()
+
+function(airdcpp_define_system_iconv system_iconv_library)
+  if(NOT IS_ABSOLUTE "${system_iconv_library}")
+    message(FATAL_ERROR "system Iconv library must be absolute")
+  endif()
+  if(IS_SYMLINK "${system_iconv_library}")
+    message(FATAL_ERROR "system Iconv library must not be a symlink")
+  endif()
+  if(NOT EXISTS "${system_iconv_library}" OR IS_DIRECTORY "${system_iconv_library}")
+    message(FATAL_ERROR "system Iconv library must be a regular file: ${system_iconv_library}")
+  endif()
+  if(TARGET AirDCCore::SystemIconv)
+    message(FATAL_ERROR "AirDCCore::SystemIconv target already exists")
+  endif()
+
+  add_library(AirDCCore::SystemIconv INTERFACE IMPORTED GLOBAL)
+  set_property(TARGET AirDCCore::SystemIconv PROPERTY
+    INTERFACE_LINK_LIBRARIES "${system_iconv_library}")
+endfunction()
