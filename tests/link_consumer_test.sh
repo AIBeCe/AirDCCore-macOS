@@ -27,6 +27,9 @@ FIXTURE_URL=file://$WORK/upstream/remote.git
 printf '%s\n' 'int fixture_core(void) { return 1; }' > "$WORK/core.c"
 xcrun clang -arch arm64 -c "$WORK/core.c" -o "$WORK/core.o"
 /usr/bin/libtool -static -o "$WORK/libairdcpp.a" "$WORK/core.o" >/dev/null
+printf '%s\n' '#include <stdio.h>' 'int main(void) { puts("AirDC++ Core fixture"); return 0; }' > "$WORK/consumer.c"
+xcrun clang -arch arm64 -mmacosx-version-min=14.0 "$WORK/consumer.c" -o "$WORK/airdcpp-smoke"
+export FAKE_EXECUTABLE=$WORK/airdcpp-smoke
 
 cat > "$WORK/bin/cmake" <<'EOF'
 #!/bin/sh
@@ -35,21 +38,51 @@ if [ "${1:-}" = --build ]; then
   if [ "${FAKE_MUTATE_SIBLING:-0}" = 1 ]; then
     printf 'changed\n' >> "$FAKE_SIBLING"
   fi
-  printf 'Undefined symbols for architecture arm64: _fixture_dependency\n' >&2
-  exit 29
+  build_dir=$2
+  items=$(cat "$build_dir/link-items")
+  case "$items" in
+    none|fixture)
+      printf 'Undefined symbols for architecture arm64: _fixture_dependency\n' >&2
+      exit 29 ;;
+    all|'BZip2,ZLIB,OpenSSLSSL,OpenSSLCrypto,miniupnpc,leveldb,maxminddb,BoostThread,BoostRegex,Snappy,Threads')
+      cp "$FAKE_EXECUTABLE" "$build_dir/airdcpp-smoke"
+      core_library=$(cat "$build_dir/core-library")
+      printf '/usr/bin/c++ main.o -Wl,-force_load,%s /opt/homebrew/lib/libbz2.a -framework CoreFoundation -lSystem -o %s/airdcpp-smoke\n' "$core_library" "$build_dir"
+      exit 0 ;;
+    *)
+      printf 'Undefined symbols for architecture arm64: _fixture_dependency\n' >&2
+      exit 29 ;;
+  esac
 fi
 build_dir=
+items=all
+core_library=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -B) build_dir=$2; shift 2 ;;
+    -DAIRDCCORE_TEST_LINK_ITEMS=*) items=${1#*=}; shift ;;
+    -DAIRDCCORE_LIBRARY=*) core_library=${1#*=}; shift ;;
     *) shift ;;
   esac
 done
 [ -n "$build_dir" ] || exit 64
 mkdir -p "$build_dir"
+printf '%s\n' "$items" > "$build_dir/link-items"
+printf '%s\n' "$core_library" > "$build_dir/core-library"
 printf 'configured\n'
 EOF
 chmod +x "$WORK/bin/cmake"
+
+cat > "$WORK/bin/brew" <<EOF
+#!/bin/sh
+set -eu
+case "\${1:-}" in
+  --prefix) printf '%s\n' '$WORK/homebrew'/"\$2" ;;
+  list) printf '%s 1.0\n' "\$3" ;;
+  *) exit 64 ;;
+esac
+EOF
+chmod +x "$WORK/bin/brew"
 
 new_case() {
   CASE_ROOT=$WORK/case-$1
@@ -57,6 +90,8 @@ new_case() {
   git -C "$ROOT" ls-files -z | (cd "$ROOT" && xargs -0 tar -cf -) | tar -xf - -C "$CASE_ROOT"
   cp "$ROOT/scripts/build" "$CASE_ROOT/scripts/build"
   [ ! -f "$ROOT/scripts/lib/link_consumer.sh" ] || cp "$ROOT/scripts/lib/link_consumer.sh" "$CASE_ROOT/scripts/lib/link_consumer.sh"
+  [ ! -f "$ROOT/scripts/lib/normalize_link_evidence.py" ] || cp "$ROOT/scripts/lib/normalize_link_evidence.py" "$CASE_ROOT/scripts/lib/normalize_link_evidence.py"
+  [ ! -f "$ROOT/cmake/modules/AirDCCoreLinkAdapters.cmake" ] || cp "$ROOT/cmake/modules/AirDCCoreLinkAdapters.cmake" "$CASE_ROOT/cmake/modules/AirDCCoreLinkAdapters.cmake"
   printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' "$FIXTURE_URL" "$FIXTURE_PIN" > "$CASE_ROOT/config/upstream.env"
   git -C "$CASE_ROOT" init -q
   git -C "$CASE_ROOT" config user.name 'AirDCCore Tests'
@@ -75,7 +110,7 @@ new_case() {
   mkdir -p "$CORE/upstream"
   cp "$WORK/libairdcpp.a" "$CORE/upstream/libairdcpp.a"
   printf 'core-release.preexisting=absent\n' > "$CORE/first-build-state.txt"
-  printf 'upstream.commit=%s\narchitecture=arm64\n' "$FIXTURE_PIN" > "$CORE/build-inputs.txt"
+  printf 'upstream.commit=%s\narchitecture=arm64\nsource.file_prefix_map=airdcpp-core\n' "$FIXTURE_PIN" > "$CORE/build-inputs.txt"
   printf 'fixture inventory\n' > "$CORE/host-inventory.txt"
   printf 'fixture configure\n' > "$CORE/command.txt"
   printf 'configured\n' > "$CORE/configure.log"
@@ -87,6 +122,9 @@ new_case() {
   printf 'upstream/libairdcpp.a\n' > "$CORE/.ninja_log"
   python3 "$CASE_ROOT/scripts/lib/inspect_core_archive.py" "$CORE/upstream/libairdcpp.a" \
     "$CORE/archive-members.tsv" "$CORE/archive-symbols.txt"
+  /usr/bin/strings "$CORE/upstream/libairdcpp.a" > "$CORE/archive-strings.txt"
+  /usr/bin/ar -t "$CORE/upstream/libairdcpp.a" > "$CORE/archive-ar-table.txt"
+  (cd "$CORE" && shasum -a 256 upstream/libairdcpp.a) > "$CORE/archive-sha256.txt"
   mkdir -p "$CASE_ROOT/Build/airdcpp-core/release"
   printf 'Gate 2 evidence\n' > "$CASE_ROOT/Build/airdcpp-core/release/original.txt"
   : > "$CASE_ROOT/Build/airdcpp-core/release/held-hash.txt"
@@ -114,6 +152,22 @@ assert_line "$LINK_ROOT/input-manifest.txt" "upstream.commit=$FIXTURE_PIN" 'stag
 assert_line "$LINK_ROOT/core-only/configure-exit-code.txt" 0 'core-only configure status'
 assert_line "$LINK_ROOT/core-only/build-exit-code.txt" 29 'expected unresolved link status'
 assert_contains "$(cat "$LINK_ROOT/core-only/build.log")" 'Undefined symbols' 'core-only failure evidence'
+assert_file_present "$LINK_ROOT/full/airdcpp-smoke"
+assert_line "$LINK_ROOT/full/build-exit-code.txt" 0 'full link status'
+assert_file_present "$LINK_ROOT/omission-results.tsv"
+assert_line "$LINK_ROOT/omission-results.tsv" '1	12	Iconv	transitive	0' 'first-pass transitive result'
+pass1_rows=$(awk -F '\t' '$1 == 1 { count++ } END { print count + 0 }' "$LINK_ROOT/omission-results.tsv")
+assert_eq "$pass1_rows" 12 'first omission pass row count'
+pass2_rows=$(awk -F '\t' '$1 == 2 { count++ } END { print count + 0 }' "$LINK_ROOT/omission-results.tsv")
+assert_eq "$pass2_rows" 11 'reduced omission pass row count'
+assert_file_present "$LINK_ROOT/link-command.raw.txt"
+assert_file_present "$LINK_ROOT/link-interface.tsv"
+assert_file_present "$LINK_ROOT/core-undefined.txt"
+assert_file_present "$LINK_ROOT/binary-file.txt"
+assert_file_present "$LINK_ROOT/binary-arch.txt"
+assert_file_present "$LINK_ROOT/otool-load-commands.txt"
+assert_line "$LINK_ROOT/run/exit-code.txt" 0 'consumer runtime status'
+assert_line "$LINK_ROOT/run/stdout.txt" 'AirDC++ Core fixture' 'consumer stdout'
 assert_dir_absent "$CASE_ROOT/Dist"
 assert_dir_absent "$CASE_ROOT/Dependencies"
 assert_file_absent "$LINK_ROOT/stage/include/airdcpp/core/localization/StringDefs.cpp"

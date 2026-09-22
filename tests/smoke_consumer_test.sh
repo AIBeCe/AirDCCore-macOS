@@ -12,15 +12,20 @@ mkdir -p "$STAGE/include/airdcpp/core" "$STAGE/lib"
 printf '%s\n' '#pragma once' '#include <string>' 'using std::string;' \
   > "$STAGE/include/airdcpp/stdinc.h"
 printf '%s\n' '#pragma once' \
-  'namespace dcpp { string getVersionTag() noexcept; }' \
+  'namespace dcpp { string getVersionTag() noexcept; string getGitCommit() noexcept; }' \
   > "$STAGE/include/airdcpp/core/version.h"
 printf '%s\n' '#include <string>' \
-  'namespace dcpp { std::string getVersionTag() noexcept { return "fixture"; } }' \
+  'namespace dcpp { std::string getVersionTag() noexcept { return "fixture"; } std::string getGitCommit() noexcept { return "fixture-commit"; } }' \
   > "$WORK/version.cpp"
+printf '%s\n' '#include <string>' \
+  'namespace dcpp { std::string getVersionTag() noexcept { return ""; } std::string getGitCommit() noexcept { return "commit-fixture"; } }' \
+  > "$WORK/untagged-version.cpp"
 printf '%s\n' 'int unrelated_fixture_symbol() { return 7; }' > "$WORK/unrelated.cpp"
 xcrun clang++ -std=c++20 -arch arm64 -c "$WORK/version.cpp" -o "$WORK/version.o"
+xcrun clang++ -std=c++20 -arch arm64 -c "$WORK/untagged-version.cpp" -o "$WORK/untagged-version.o"
 xcrun clang++ -std=c++20 -arch arm64 -c "$WORK/unrelated.cpp" -o "$WORK/unrelated.o"
 /usr/bin/libtool -static -o "$STAGE/lib/libairdcpp.a" "$WORK/version.o" >/dev/null
+/usr/bin/libtool -static -o "$STAGE/lib/libuntagged.a" "$WORK/untagged-version.o" >/dev/null
 /usr/bin/libtool -static -o "$STAGE/lib/libmissing.a" "$WORK/unrelated.o" >/dev/null
 
 configure_case() {
@@ -58,6 +63,14 @@ if ! output=$(cmake --build "$WORK/valid" --verbose 2>&1); then
 fi
 assert_eq "$("$WORK/valid/airdcpp-smoke")" 'AirDC++ Core fixture' 'smoke output'
 assert_eq "$(/usr/bin/lipo -archs "$WORK/valid/airdcpp-smoke")" arm64 'smoke architecture'
+
+if ! output=$(configure_case untagged "$STAGE/include" "$STAGE/lib/libuntagged.a" arm64 2>&1); then
+  fail "untagged standalone configure failed: $output"
+fi
+if ! output=$(cmake --build "$WORK/untagged" --verbose 2>&1); then
+  fail "untagged standalone link failed: $output"
+fi
+assert_eq "$("$WORK/untagged/airdcpp-smoke" 2>/dev/null || true)" 'AirDC++ Core commit-fixture' 'untagged commit fallback'
 
 expect_configure_failure absent-archive 'AIRDCCORE_LIBRARY must be a regular file' \
   "$STAGE/include" "$STAGE/lib/absent.a" arm64

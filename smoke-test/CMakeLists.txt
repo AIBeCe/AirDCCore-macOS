@@ -74,7 +74,10 @@ if(NOT "${AIRDCCORE_TEST_LINK_ITEMS}" STREQUAL "fixture")
   find_package(Boost 1.70.0 CONFIG COMPONENTS regex thread REQUIRED)
   find_package(Snappy REQUIRED)
   find_package(Threads REQUIRED)
-  find_package(Iconv REQUIRED)
+
+  include(AirDCCoreLinkAdapters)
+  airdcpp_adapt_leveldb_snappy()
+  airdcpp_define_system_iconv("${AIRDCCORE_SYSTEM_ICONV_LIBRARY}")
 
   set(candidate_link_items
     "BZip2|BZip2::BZip2"
@@ -88,12 +91,36 @@ if(NOT "${AIRDCCORE_TEST_LINK_ITEMS}" STREQUAL "fixture")
     "BoostRegex|Boost::regex"
     "Snappy|Snappy::snappy"
     "Threads|Threads::Threads"
-    "Iconv|Iconv::Iconv")
+    "Iconv|AirDCCore::SystemIconv")
+
+  set(all_logical_items)
   foreach(candidate IN LISTS candidate_link_items)
     string(REPLACE "|" ";" candidate_parts "${candidate}")
     list(GET candidate_parts 0 logical_name)
     list(GET candidate_parts 1 target_name)
-    if(NOT "${AIRDCCORE_OMIT_LINK_ITEM}" STREQUAL "${logical_name}")
+    list(APPEND all_logical_items "${logical_name}")
+    target_include_directories(airdcpp-smoke PRIVATE
+      "$<TARGET_PROPERTY:${target_name},INTERFACE_INCLUDE_DIRECTORIES>")
+  endforeach()
+
+  if(NOT DEFINED AIRDCCORE_TEST_LINK_ITEMS OR "${AIRDCCORE_TEST_LINK_ITEMS}" STREQUAL "" OR "${AIRDCCORE_TEST_LINK_ITEMS}" STREQUAL "all")
+    set(requested_logical_items ${all_logical_items})
+  elseif("${AIRDCCORE_TEST_LINK_ITEMS}" STREQUAL "none")
+    set(requested_logical_items)
+  else()
+    string(REPLACE "," ";" requested_logical_items "${AIRDCCORE_TEST_LINK_ITEMS}")
+    foreach(requested IN LISTS requested_logical_items)
+      if(NOT requested IN_LIST all_logical_items)
+        message(FATAL_ERROR "unknown AIRDCCORE_TEST_LINK_ITEMS entry: ${requested}")
+      endif()
+    endforeach()
+  endif()
+
+  foreach(candidate IN LISTS candidate_link_items)
+    string(REPLACE "|" ";" candidate_parts "${candidate}")
+    list(GET candidate_parts 0 logical_name)
+    list(GET candidate_parts 1 target_name)
+    if(logical_name IN_LIST requested_logical_items AND NOT "${AIRDCCORE_OMIT_LINK_ITEM}" STREQUAL "${logical_name}")
       target_link_libraries(airdcpp-smoke PRIVATE "${target_name}")
     endif()
   endforeach()

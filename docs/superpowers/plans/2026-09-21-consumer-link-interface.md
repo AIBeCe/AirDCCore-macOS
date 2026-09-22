@@ -282,9 +282,9 @@ python3 -m unittest tests/link_evidence_test.py -v
 
 Expected: all PASS, including fixed-point ordering and every Review Focus failure.
 
-- [ ] **Step 6: Run the first real link experiment once and stop on unexpected evidence.**
+- [ ] **Step 6: Run the real link experiment and stop on unexpected evidence.**
 
-Pre-check the archive hash equals `0bc3cc3c9a4424bbceb0bd2c1682e963ecd388b0bacc6acb3c0575aaa8e464e7`, then run:
+Pre-check the archive hash equals `f345fe0e5fc7bbf289642e5a8846795f0e0d177288505419b0ba96cc23367441`, produced by the approved source-prefix-map Gate 3 amendment. The previous candidate hash `0bc3cc3c9a4424bbceb0bd2c1682e963ecd388b0bacc6acb3c0575aaa8e464e7` remains preserved under Gate 3 attempt evidence. Then run:
 
 ```sh
 ./scripts/build --link-consumer

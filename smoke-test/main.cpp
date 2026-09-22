@@ -5,12 +5,15 @@
 #include <string>
 
 int main() {
-    const std::string version = dcpp::getVersionTag();
-    if (version.empty()) {
-        std::cerr << "AirDC++ Core version is empty\n";
+    std::string identity = dcpp::getVersionTag();
+    if (identity.empty()) {
+        identity = dcpp::getGitCommit();
+    }
+    if (identity.empty()) {
+        std::cerr << "AirDC++ Core identity is empty\n";
         return 1;
     }
 
-    std::cout << "AirDC++ Core " << version << '\n';
+    std::cout << "AirDC++ Core " << identity << '\n';
     return 0;
 }
