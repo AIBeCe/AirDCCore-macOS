@@ -24,11 +24,11 @@
 **Files:**
 - Create: `tests/gate5_distribution_shape_test.sh`
 
-- [ ] Write a failing offline test requiring an accepted ADR at `docs/decisions/0001-aggregate-static-distribution.md`.
-- [ ] Require exact clauses for the chosen artifact path, component inventory, system-link boundary, deterministic construction method, collision rejection, license/provenance obligations, Phase 6 handoff, rejected alternatives, and explicit non-claims.
-- [ ] Require the Gate 4 report and measured Core/archive identities to remain referenced.
-- [ ] Require `Source`, `Dependencies`, `Build`, and `Dist` to remain untracked, and require `Dependencies`/`Dist` to be absent.
-- [ ] Run RED; the only failure must be the missing ADR.
+- [x] Write a failing offline test requiring an accepted ADR at `docs/decisions/0001-aggregate-static-distribution.md`.
+- [x] Require exact clauses for the chosen artifact path, component inventory, system-link boundary, deterministic construction method, strong-symbol collision rejection, weak/coalesced-symbol inventory, license/provenance obligations, Phase 6 handoff, rejected alternatives, and explicit non-claims.
+- [x] Require the Gate 4 report and measured Core/archive identities to remain referenced.
+- [x] Require `Source`, `Dependencies`, `Build`, and `Dist` to remain untracked, and require `Dependencies`/`Dist` to be absent.
+- [x] Run RED; the only failure must be the missing ADR.
 
 ### Task 2: Accepted aggregate-archive ADR and operator documentation
 
@@ -40,23 +40,23 @@
 - Modify: `docs/build-and-release.md`
 - Modify: `docs/dependencies.md`
 
-- [ ] Record `Accepted` status and the Gate 4 evidence that drove the choice.
-- [ ] Select future `Dist/lib/libairdcpp.a` containing Core plus pinned static BZip2, zlib, OpenSSL SSL/Crypto, miniupnpc, LevelDB, MaxMindDB, and Snappy objects.
-- [ ] Keep SDK/system Iconv, libc++, and libSystem external and machine-readable; record that Gate 4 found no Apple framework requirement.
-- [ ] Define construction as: validate static ARM64 inputs; enumerate objects in declared component order; reject duplicate global definitions; extract into component/ordinal namespaces; rename members uniquely; generate a byte-sorted file list; run Apple `libtool -static -D -filelist`; regenerate the table of contents; and independently verify members, symbols, path leakage, and repeatability.
-- [ ] Require per-component manifest/checksum/license records even though `Dist/lib` publishes one archive.
-- [ ] Reject separate public dependency archives because they leak order/transitive complexity to Project 2; reject CMake/pkg-config-wrapped multiple archives because that interface does not align with the later SPM boundary.
-- [ ] State that Gate 5 does not prove static dependency availability, macOS 14 compatibility, licensing completeness, aggregate feasibility, or reproducibility; those are blocking Phase 6–8 gates.
-- [ ] Update concise docs and remove statements that the shape is undecided.
-- [ ] Run Gate 5 GREEN and `git diff --check develop`.
+- [x] Record `Accepted` status and the Gate 4 evidence that drove the choice.
+- [x] Select future `Dist/lib/libairdcpp.a` containing Core plus pinned static BZip2, zlib, OpenSSL SSL/Crypto, miniupnpc, LevelDB, MaxMindDB, and Snappy objects.
+- [x] Keep SDK/system Iconv, libc++, and libSystem external and machine-readable; record that Gate 4 found no Apple framework requirement.
+- [x] Define construction as: validate static ARM64 inputs; enumerate objects in declared component order; reject duplicate strong external definitions; inventory and justify repeated weak/coalesced definitions; rename every extracted member with component/member ordinals in its basename; generate a byte-sorted file list; run Apple `libtool -static -D -filelist`; regenerate the table of contents; and independently verify members, symbols, path leakage, and repeatability.
+- [x] Require per-component manifest/checksum/license records even though `Dist/lib` publishes one archive.
+- [x] Reject separate public dependency archives because they leak order/transitive complexity to Project 2; reject CMake/pkg-config-wrapped multiple archives because that interface does not align with the later SPM boundary.
+- [x] State that Gate 5 does not prove static dependency availability, macOS 14 compatibility, licensing completeness, aggregate feasibility, or reproducibility; those are blocking Phase 6–8 gates.
+- [x] Update concise docs and remove statements that the shape is undecided.
+- [x] Run Gate 5 GREEN and `git diff --check develop`.
 
 ### Task 3: Review and GitFlow completion
 
-- [ ] Run the full offline Phase 1–5 regression suite.
-- [ ] Request one independent read-only review focused on evidence fidelity, component completeness, deterministic construction, licensing boundaries, downstream constraint use, and the Phase 5 hard stop.
-- [ ] Fix Important/Critical findings with a focused test-first pass; fix low-risk Minor findings or record rationale.
-- [ ] Commit the Gate 5 decision on the feature branch.
-- [ ] Stop before Phase 6 and present GitFlow integration choices.
+- [x] Run the full offline Phase 1–5 regression suite.
+- [x] Request one independent read-only review focused on evidence fidelity, component completeness, deterministic construction, licensing boundaries, downstream constraint use, and the Phase 5 hard stop.
+- [x] Fix Important/Critical findings with a focused test-first pass; fix low-risk Minor findings or record rationale.
+- [x] Commit the Gate 5 decision on the feature branch.
+- [x] Stop before Phase 6 and present GitFlow integration choices.
 
 ## Gate 5 acceptance
 

@@ -28,7 +28,7 @@ versioned pins + tracked patches
 
 ## Stable interface
 
-The stable user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Acquisition plus `scripts/build --configure-only`, `--build-core`, and `--link-consumer` are implemented. Packaging, the final verification entry point, and cleaning remain deferred.
+The stable user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Acquisition plus `scripts/build --configure-only`, `--build-core`, and `--link-consumer` are implemented. The distribution shape is decided; dependency reconstruction, aggregation, packaging, the final verification entry point, and cleaning remain deferred.
 
 `Dist` is the only published output boundary. Consumers must not depend on `Build`, Homebrew paths, or the upstream checkout.
 
@@ -60,4 +60,10 @@ tracked smoke-test <- staged headers + archive <- link-interface
 
 Phase 3 applies the fixed Apple Clang/Release/C++20/arm64/deployment-14.0 policy and a deterministic source prefix-map without editing upstream. It produces an ignored archive plus independently regenerated member, symbol, string, table, and checksum evidence.
 
-Phase 4 copies only validated headers and the exact archive into an ignored stage. Its standalone CMake project never imports upstream CMake. It first proves the force-loaded Core archive is not self-contained, then measures direct and transitive dependencies through two omission passes and runs the resulting executable. The [Gate 4 report](reports/2026-09-21-gate-4-consumer-link.md) is the tracked result. This flow does not choose the future `Dist/lib` shape or turn current Homebrew paths into publication dependencies.
+Phase 4 copies only validated headers and the exact archive into an ignored stage. Its standalone CMake project never imports upstream CMake. It first proves the force-loaded Core archive is not self-contained, then measures direct and transitive dependencies through two omission passes and runs the resulting executable. The [Gate 4 report](reports/2026-09-21-gate-4-consumer-link.md) is the tracked result. This flow does not turn current Homebrew paths into publication dependencies.
+
+## Accepted Phase 5 distribution boundary
+
+[ADR 0001](decisions/0001-aggregate-static-distribution.md) selects one future `Dist/lib/libairdcpp.a`. It will contain uniquely named objects from Core, BZip2, zlib, OpenSSL SSL/Crypto, miniupnpc, LevelDB, MaxMindDB, and Snappy. The public archive is accompanied by per-component provenance, checksum, member-mapping, and license metadata; flattening the link interface must not flatten attribution.
+
+SDK Iconv remains an explicit external consumer input; libc++ and libSystem remain implicit Apple toolchain load commands. Gate 4 measured no required Apple framework. `Dist` consumers may not discover Homebrew or link private component archives from `Build`. Phase 6 must reconstruct and validate the static component inputs before the deterministic aggregate construction contract can be implemented.
