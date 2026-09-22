@@ -76,12 +76,15 @@ core_build_inputs() {
   printf 'upstream.commit=%s\ncmake.version=%s\nclang.version=%s\nsdk.version=%s\nformula.inventory.sha256=%s\narchitecture=arm64\ndeployment_target=14.0\nbuild_type=Release\ncxx_standard=20\ncxx_extensions=OFF\nbuild_shared_libs=OFF\nenable_natpmp=OFF\nenable_tbb=OFF\n' \
     "$AIRDCPP_CORE_COMMIT" "$version" "$clang" "$sdk" "${formula_digest%% *}"
   if [ "$format" = current ]; then
+    printf 'source.file_prefix_map=airdcpp-core\n'
+  fi
+  if [ "$format" = current ] || [ "$format" = pre-prefix-current ]; then
     identity=$(sed '/^generated\./d' "$inventory" | shasum -a 256) || core_die 'failed to hash host and toolchain identity'
     printf 'host.toolchain.inventory.sha256=%s\n' "${identity%% *}"
   fi
 }
 
-core_evidence_fields='first-build-state.txt build-inputs.txt host-inventory.txt command.txt configure.log exit-code.txt cache.txt airdcpp-configure-summary.txt build-command.txt build.log build-exit-code.txt archive-members.tsv archive-symbols.txt'
+core_evidence_fields='first-build-state.txt build-inputs.txt host-inventory.txt command.txt configure.log exit-code.txt cache.txt airdcpp-configure-summary.txt build-command.txt build.log build-exit-code.txt archive-members.tsv archive-symbols.txt archive-strings.txt archive-ar-table.txt archive-sha256.txt'
 
 core_validate_attempt_evidence() {
   record=$1
@@ -166,7 +169,8 @@ EOF
   for field in first-build-state.txt build-inputs.txt host-inventory.txt \
       command.txt configure.log exit-code.txt cache.txt \
       airdcpp-configure-summary.txt build-command.txt build.log build-exit-code.txt \
-      archive-members.tsv archive-symbols.txt; do
+      archive-members.tsv archive-symbols.txt archive-strings.txt \
+      archive-ar-table.txt archive-sha256.txt; do
     source=$CORE_OUTPUT/$field
     [ -e "$source" ] || continue
     [ -f "$source" ] && [ ! -L "$source" ] || core_die "attempt evidence is not a regular file: $field"
@@ -228,7 +232,17 @@ else
   recorded=$(cat "$CORE_OUTPUT/build-inputs.txt") || core_die 'failed to read previous build inputs'
   if [ "$recorded" != "$inputs" ]; then
     legacy=$(core_build_inputs "$CORE_OUTPUT/host-inventory.txt" legacy) || core_die 'failed to determine previous build inputs'
-    [ "$recorded" = "$legacy" ] || core_die 'build inputs changed; preserve or archive core-release before a new attempt'
+    previous_current=$(core_build_inputs "$CORE_OUTPUT/host-inventory.txt" pre-prefix-current) ||
+      core_die 'failed to determine previous current-format build inputs'
+    if [ "$recorded" = "$legacy" ] || [ "$recorded" = "$previous_current" ]; then
+      inputs_staging=$(mktemp "$CORE_OUTPUT/.build-inputs.XXXXXX") ||
+        core_die 'failed to stage migrated build inputs'
+      printf '%s\n' "$inputs" > "$inputs_staging"
+      mv "$inputs_staging" "$CORE_OUTPUT/build-inputs.txt" ||
+        core_die 'failed to publish migrated build inputs'
+    else
+      core_die 'build inputs changed; preserve or archive core-release before a new attempt'
+    fi
   fi
 fi
 cmake_prefix_path=$(dependency_cmake_prefix_path) || core_die 'failed to resolve CMake prefixes'
@@ -254,9 +268,26 @@ archive=$CORE_OUTPUT/upstream/libairdcpp.a
   core_die "Core target exited successfully without a regular nonempty archive: $archive"
 members=$CORE_OUTPUT/archive-members.tsv
 symbols=$CORE_OUTPUT/archive-symbols.txt
+archive_strings=$CORE_OUTPUT/archive-strings.txt
+archive_table=$CORE_OUTPUT/archive-ar-table.txt
+archive_hash=$CORE_OUTPUT/archive-sha256.txt
 prepare_inventory_output "$members"
 prepare_inventory_output "$symbols"
+prepare_inventory_output "$archive_strings"
+prepare_inventory_output "$archive_table"
+prepare_inventory_output "$archive_hash"
 python3 "$PROJECT_ROOT/scripts/lib/inspect_core_archive.py" "$archive" "$members" "$symbols" ||
   core_die "Core archive member inspection failed: $archive"
+/usr/bin/strings "$archive" > "$archive_strings" ||
+  core_die "Core archive string inspection failed: $archive"
+/usr/bin/ar -t "$archive" > "$archive_table" ||
+  core_die "Core archive table inspection failed: $archive"
+(cd "$CORE_OUTPUT" && shasum -a 256 upstream/libairdcpp.a) > "$archive_hash" ||
+  core_die "Core archive hashing failed: $archive"
+if grep -F "$PROJECT_ROOT" "$archive_strings" >/dev/null 2>&1 ||
+    { [ -n "${HOME:-}" ] && grep -F "$HOME/" "$archive_strings" >/dev/null 2>&1; } ||
+    grep -Eq '/(Source|Build)/' "$archive_strings"; then
+  core_die 'archive contains an absolute home, Source, or Build path'
+fi
 core_assert_scope
 printf 'build: core archive candidate=%s\n' "$archive"

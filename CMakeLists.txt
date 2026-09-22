@@ -39,6 +39,9 @@ set(AIRDCPP_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/airdcpp-core" CA
 # The parent summary must see imports discovered by upstream find_package calls.
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 add_subdirectory("${AIRDCPP_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/upstream")
+set(AIRDCPP_SOURCE_PREFIX_MAP airdcpp-core)
+airdcpp_apply_source_prefix_map(airdcpp
+  "${AIRDCPP_CORE_SOURCE_DIR}" "${AIRDCPP_SOURCE_PREFIX_MAP}")
 
 # Homebrew LevelDB currently exports its own -Werror to every consumer.
 # Keep its thread-safety diagnostic, but do not let a dependency set Core's
@@ -77,6 +80,7 @@ file(WRITE "${AIRDCPP_CONFIGURE_SUMMARY}"
   "build_shared_libs=${BUILD_SHARED_LIBS}\n"
   "enable_natpmp=${ENABLE_NATPMP}\n"
   "enable_tbb=${ENABLE_TBB}\n"
+  "source.file_prefix_map=${AIRDCPP_SOURCE_PREFIX_MAP}\n"
   "upstream_source=${AIRDCPP_CORE_SOURCE_DIR}\n"
   "parent.version=${VERSION}\n"
   "parent.tag_application=${TAG_APPLICATION}\n"

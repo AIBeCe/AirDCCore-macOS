@@ -49,12 +49,14 @@ before_preserved=$(find "$BUILD_ROOT" -mindepth 1 -maxdepth 1 ! -name core-relea
 for evidence in first-build-state.txt build-inputs.txt host-inventory.txt command.txt \
     configure.log cache.txt CMakeCache.txt airdcpp-configure-summary.txt \
     build-command.txt build.log build-exit-code.txt archive-members.tsv \
-    archive-symbols.txt .ninja_log; do
+    archive-symbols.txt archive-strings.txt archive-ar-table.txt \
+    archive-sha256.txt .ninja_log; do
   [ -f "$BUILD/$evidence" ] && [ ! -L "$BUILD/$evidence" ] || fail "missing or unsafe Core evidence: $evidence"
 done
 assert_line "$BUILD/first-build-state.txt" 'core-release.preexisting=absent' 'first-build provenance'
 assert_line "$BUILD/build-exit-code.txt" 0 'Core build status'
 assert_line "$BUILD/build-inputs.txt" "upstream.commit=$AIRDCPP_CORE_COMMIT" 'build source pin'
+assert_line "$BUILD/build-inputs.txt" 'source.file_prefix_map=airdcpp-core' 'source prefix-map build input'
 assert_contains "$(cat "$BUILD/build-command.txt")" "'--target' 'airdcpp'" 'Core-only target'
 assert_contains "$(cat "$BUILD/build-command.txt")" "'--config' 'Release'" 'Release build command'
 assert_contains "$(cat "$BUILD/build-command.txt")" "'--parallel' '2'" 'bounded build parallelism'
@@ -66,6 +68,8 @@ for expected in architecture=arm64 deployment_target=14.0 build_type=Release \
     build_shared_libs=OFF enable_natpmp=OFF enable_tbb=OFF; do
   assert_line "$BUILD/airdcpp-configure-summary.txt" "$expected" 'configured ARM64 policy'
 done
+assert_line "$BUILD/airdcpp-configure-summary.txt" \
+  'source.file_prefix_map=airdcpp-core' 'configured source prefix-map policy'
 for expected in BUILD_SHARED_LIBS:BOOL=OFF CMAKE_BUILD_TYPE:STRING=Release \
     CMAKE_CXX_EXTENSIONS:UNINITIALIZED=OFF CMAKE_CXX_STANDARD:STRING=20 \
     CMAKE_OSX_ARCHITECTURES:STRING=arm64 CMAKE_OSX_DEPLOYMENT_TARGET:STRING=14.0 \
@@ -109,8 +113,20 @@ TEMP=$(mktemp -d /private/tmp/airdc-gate3.XXXXXX) || fail 'failed to create veri
 trap 'rm -rf -- "$TEMP"' 0 1 2 15
 python3 "$ROOT/scripts/lib/inspect_core_archive.py" "$ARCHIVE" \
   "$TEMP/members.tsv" "$TEMP/symbols.txt" || fail 'independent archive inspection failed'
+/usr/bin/strings "$ARCHIVE" > "$TEMP/strings.txt" || fail 'independent archive string inspection failed'
+(cd "$BUILD" && shasum -a 256 upstream/libairdcpp.a) > "$TEMP/archive-sha256.txt" ||
+  fail 'independent archive hash failed'
+/usr/bin/ar -t "$ARCHIVE" > "$TEMP/archive-ar-table.txt" || fail 'independent archive table failed'
 cmp -s "$BUILD/archive-members.tsv" "$TEMP/members.tsv" || fail 'archive member report differs from actual archive'
 cmp -s "$BUILD/archive-symbols.txt" "$TEMP/symbols.txt" || fail 'archive symbol report differs from actual archive'
+cmp -s "$BUILD/archive-strings.txt" "$TEMP/strings.txt" || fail 'archive string report differs from actual archive'
+cmp -s "$BUILD/archive-sha256.txt" "$TEMP/archive-sha256.txt" || fail 'archive hash report differs from actual archive'
+cmp -s "$BUILD/archive-ar-table.txt" "$TEMP/archive-ar-table.txt" || fail 'archive table report differs from actual archive'
+if grep -F "$ROOT" "$TEMP/strings.txt" >/dev/null 2>&1 ||
+    { [ -n "${HOME:-}" ] && grep -F "$HOME/" "$TEMP/strings.txt" >/dev/null 2>&1; } ||
+    grep -Eq '/(Source|Build)/' "$TEMP/strings.txt"; then
+  fail 'archive contains an absolute home, Source, or Build path'
+fi
 
 assert_eq "$(git -C "$ROOT" ls-files Source Dependencies Build Dist)" '' 'no generated paths tracked'
 [ ! -e "$ROOT/Dependencies" ] && [ ! -L "$ROOT/Dependencies" ] || fail 'Dependencies unexpectedly exists'

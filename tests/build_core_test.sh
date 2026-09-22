@@ -12,6 +12,10 @@ printf 'int air_dccore_fixture(void) { return 1; }\n' > "$WORK/tiny.c"
 xcrun clang -c -arch arm64 "$WORK/tiny.c" -o "$WORK/tiny.o"
 /usr/bin/libtool -static -o "$WORK/libfixture.a" "$WORK/tiny.o" >/dev/null
 FAKE_ARCHIVE=$WORK/libfixture.a
+printf 'const char* leaked_path(void) { return "/Users/example/Source/airdcpp-core/file.cpp"; }\n' > "$WORK/leak.c"
+xcrun clang -c -arch arm64 "$WORK/leak.c" -o "$WORK/leak.o"
+/usr/bin/libtool -static -o "$WORK/libleak.a" "$WORK/leak.o" >/dev/null
+LEAK_ARCHIVE=$WORK/libleak.a
 FAKE_CMAKE_CALLS=$WORK/cmake-calls.txt
 export FAKE_ARCHIVE FAKE_CMAKE_CALLS
 
@@ -56,7 +60,7 @@ write_fake cmake 'set -eu' \
   'while [ "$#" -gt 0 ]; do case "$1" in -B) build_dir=$2; shift 2 ;; *) shift ;; esac; done' \
   'mkdir -p "$build_dir"' \
   'printf "CMAKE_BUILD_TYPE:STRING=Release\n" > "$build_dir/CMakeCache.txt"' \
-  'printf "architecture=arm64\nbuild_type=Release\n" > "$build_dir/airdcpp-configure-summary.txt"'
+  'printf "architecture=arm64\nbuild_type=Release\nsource.file_prefix_map=airdcpp-core\n" > "$build_dir/airdcpp-configure-summary.txt"'
 
 create_remote_fixture "$WORK/fixture"
 printf 'project(fixture)\n' > "$WORK/fixture/seed/CMakeLists.txt"
@@ -104,6 +108,19 @@ assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/first-build-stat
 assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/build-inputs.txt"
 assert_contains "$(cat "$CASE_ROOT/Build/airdcpp-core/core-release/build-inputs.txt")" \
   'host.toolchain.inventory.sha256=' 'complete toolchain fingerprint'
+assert_line "$CASE_ROOT/Build/airdcpp-core/core-release/build-inputs.txt" \
+  'source.file_prefix_map=airdcpp-core' 'source prefix-map build input'
+assert_line "$CASE_ROOT/Build/airdcpp-core/core-release/airdcpp-configure-summary.txt" \
+  'source.file_prefix_map=airdcpp-core' 'source prefix-map configure policy'
+assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/archive-strings.txt"
+assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/archive-ar-table.txt"
+assert_file_present "$CASE_ROOT/Build/airdcpp-core/core-release/archive-sha256.txt"
+assert_line "$CASE_ROOT/Build/airdcpp-core/core-release/archive-sha256.txt" \
+  "$(cd "$CASE_ROOT/Build/airdcpp-core/core-release" && shasum -a 256 upstream/libairdcpp.a)" \
+  'canonical archive hash evidence'
+assert_eq "$(cat "$CASE_ROOT/Build/airdcpp-core/core-release/archive-ar-table.txt")" \
+  "$(/usr/bin/ar -t "$CASE_ROOT/Build/airdcpp-core/core-release/upstream/libairdcpp.a")" \
+  'archive table evidence'
 MEMBERS=$CASE_ROOT/Build/airdcpp-core/core-release/archive-members.tsv
 SYMBOLS=$CASE_ROOT/Build/airdcpp-core/core-release/archive-symbols.txt
 assert_file_present "$MEMBERS"
@@ -122,6 +139,23 @@ unset FAKE_CMAKE_VERSION
 FAKE_FORMULA_VERSION=2.0.0; export FAKE_FORMULA_VERSION
 expect_failure 'build inputs changed' run_core
 unset FAKE_FORMULA_VERSION
+
+new_case prefix-map-migration
+output=$(run_core)
+MIGRATION_OUTPUT=$CASE_ROOT/Build/airdcpp-core/core-release
+sed -e '/^source\.file_prefix_map=/d' -e '/^host\.toolchain\.inventory\.sha256=/d' \
+  "$MIGRATION_OUTPUT/build-inputs.txt" > "$MIGRATION_OUTPUT/build-inputs.old"
+mv "$MIGRATION_OUTPUT/build-inputs.old" "$MIGRATION_OUTPUT/build-inputs.txt"
+output=$(run_core)
+assert_line "$MIGRATION_OUTPUT/build-inputs.txt" 'source.file_prefix_map=airdcpp-core' \
+  'migrated prefix-map input'
+assert_not_contains "$(cat "$MIGRATION_OUTPUT/attempts/0001/build-inputs.txt")" \
+  'source.file_prefix_map=' 'preserved pre-prefix-map input'
+
+new_case archive-path-leak
+FAKE_ARCHIVE=$LEAK_ARCHIVE; export FAKE_ARCHIVE
+expect_failure 'archive contains an absolute home, Source, or Build path' run_core
+FAKE_ARCHIVE=$WORK/libfixture.a; export FAKE_ARCHIVE
 
 new_case failure
 mkdir -p "$CASE_ROOT/Build/airdcpp-core/release"
