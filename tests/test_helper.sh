@@ -105,6 +105,7 @@ create_case_project() {
   mkdir -p "$case_root/config" "$case_root/scripts/lib" "$case_root/Source"
   cp "$repo_root/scripts/update" "$case_root/scripts/update"
   cp "$repo_root/scripts/lib/upstream.sh" "$case_root/scripts/lib/upstream.sh"
+  cp "$repo_root/scripts/lib/update_core.sh" "$case_root/scripts/lib/update_core.sh"
   printf '/Source/airdcpp-core/\n' > "$case_root/.gitignore"
   printf 'AIRDCPP_CORE_URL=%s\nAIRDCPP_CORE_COMMIT=%s\n' \
     "$fixture_url" "$fixture_commit" > "$case_root/config/upstream.env"
