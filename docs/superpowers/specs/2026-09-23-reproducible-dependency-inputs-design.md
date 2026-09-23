@@ -1,6 +1,6 @@
 # Reproducible Dependency Inputs Design
 
-**Status:** Proposed for review
+**Status:** Accepted
 
 **Design date:** 2026-09-23
 
