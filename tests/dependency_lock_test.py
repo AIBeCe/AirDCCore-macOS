@@ -162,6 +162,17 @@ class DependencyLockTests(unittest.TestCase):
                 value["dependencies"][0]["build_options"] = [option]
                 self.assert_rejected(value, "unsafe")
 
+    def test_literal_host_paths_in_options_are_rejected(self):
+        for field, option in (
+            ("configure_options", "-DCMAKE_PREFIX_PATH=/opt/homebrew"),
+            ("build_options", "-I/opt/homebrew/Cellar/zlib/1.3.2/include"),
+            ("build_options", "-L/opt/homebrew/lib"),
+        ):
+            with self.subTest(field=field, option=option):
+                value = copy.deepcopy(self.value)
+                value["dependencies"][0][field] = [option]
+                self.assert_rejected(value, "host path")
+
     def test_unknown_substitution_token_is_rejected(self):
         self.value["dependencies"][0]["build_options"] = ["-j@SHELL@"]
         self.assert_rejected(self.value, "token")

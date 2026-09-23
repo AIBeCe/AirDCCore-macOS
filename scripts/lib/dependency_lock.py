@@ -20,6 +20,7 @@ HEX_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*\Z")
 TOKENS = {"@SOURCE@", "@BUILD@", "@STAGE@", "@JOBS@", "@EPOCH@",
           "@PREFIX:snappy@", "@SDKROOT@"}
+SYSTEM_TOOL_OPTIONS = {"CC=/usr/bin/clang", "AR=/usr/bin/ar", "RANLIB=/usr/bin/ranlib"}
 UNSAFE_OPTION = re.compile(r"[\x00-\x1f\x7f;&|`$<>\\\"']")
 
 
@@ -153,6 +154,12 @@ def _option(value, label: str) -> str:
         residue = residue.replace(token, "")
     if "@" in residue:
         raise LockError(f"{label}: unknown substitution token")
+    if value not in SYSTEM_TOOL_OPTIONS:
+        path_view = value
+        for token in TOKENS:
+            path_view = re.sub(re.escape(token) + r"(?:/[A-Za-z0-9_+-][A-Za-z0-9._+-]*)*", "", path_view)
+        if "/" in path_view:
+            raise LockError(f"{label}: literal host path is not allowed")
     return value
 
 
