@@ -56,12 +56,59 @@ class BuildPaths:
     temporary: Path
 
 
+@dataclass(frozen=True)
+class PrefixSnapshot:
+    identity: tuple[int, int, int]
+    digest: str
+
+
 def _run_text(argv: tuple[str, ...]) -> str:
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C", "LANG": "C"}
+    env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
     result = subprocess.run(argv, capture_output=True, text=True, env=env)
     if result.returncode:
         raise BuildError(f"failed to resolve required tool: {argv[-1]}")
     return result.stdout.strip()
+
+
+def _run_version(argv: tuple[str, ...]) -> str:
+    result = subprocess.run(argv, capture_output=True, text=True,
+                            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"})
+    version = (result.stdout + result.stderr).strip()
+    if result.returncode or not version:
+        raise BuildError(f"failed to identify required tool: {argv[0]}")
+    return version
+
+
+def _trusted_host_tool(name: str, developer_root: Path) -> Path:
+    # Homebrew's public links are stable across formula upgrades. The resolved
+    # target must still belong to that formula's Cellar, not an arbitrary link.
+    candidates = (Path("/opt/homebrew/bin") / name,
+                  Path("/usr/local/bin") / name,
+                  Path("/usr/bin") / name, Path("/bin") / name)
+    for candidate in candidates:
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        resolved = candidate.resolve(strict=True)
+        if candidate.parent in (Path("/opt/homebrew/bin"), Path("/usr/local/bin")):
+            cellar = candidate.parent.parent / "Cellar" / name
+            relative = resolved.relative_to(cellar) if resolved.is_relative_to(cellar) else None
+            if (relative is None or len(relative.parts) < 3
+                    or relative.parts[1:] != ("bin", name)):
+                raise BuildError(f"untrusted Homebrew host tool: {name}")
+        elif not (resolved.is_relative_to(developer_root)
+                  or resolved.is_relative_to(Path("/usr/bin"))
+                  or resolved.is_relative_to(Path("/bin"))):
+            raise BuildError(f"untrusted system host tool: {name}")
+        return resolved
+    raise BuildError(f"missing required host tool: {name}")
+
+
+def _version_output(name: str, resolved: Path, apple_toolchain_version: str) -> str:
+    flags = {"apple.ranlib": "-V"}
+    # These Apple utilities do not provide a successful version command.
+    if name in ("apple.ar", "apple.lipo", "apple.strings"):
+        return "Apple toolchain clang --version:\n" + apple_toolchain_version
+    return _run_version((str(resolved), flags.get(name, "--version")))
 
 
 def resolve_tool_inventory() -> ToolInventory:
@@ -73,23 +120,25 @@ def resolve_tool_inventory() -> ToolInventory:
     apple = {key: _run_text((xcrun, "--find", name)) for key, name in apple_names.items()}
     sdkroot = _run_text((xcrun, "--sdk", "macosx", "--show-sdk-path"))
     sdk_version = _run_text((xcrun, "--sdk", "macosx", "--show-sdk-version"))
-    host = {}
-    for name in ("cmake", "ninja", "perl", "make"):
-        path = shutil.which(name)
-        if path is None:
-            raise BuildError(f"missing required host tool: {name}")
-        host[name] = os.path.abspath(path)
+    developer_root = Path(_run_text((xcrun, "--show-toolchain-path"))).parent.parent
+    host = {name: str(_trusted_host_tool(name, developer_root))
+            for name in ("cmake", "ninja", "perl", "make")}
     if not Path(xcrun).is_file():
         raise BuildError("missing required Apple tool: xcrun")
     identities = {}
-    for name, path in {**{f"apple.{key}": value for key, value in apple.items()},
-                       **{f"host.{key}": value for key, value in host.items()},
-                       "xcrun": xcrun}.items():
+    discovered = {**{f"apple.{key}": value for key, value in apple.items()},
+                  **{f"host.{key}": value for key, value in host.items()},
+                  "xcrun": xcrun}
+    apple_toolchain_version = _run_version((str(Path(apple["cc"]).resolve(strict=True)),
+                                            "--version"))
+    for name, path in discovered.items():
         resolved = Path(path).resolve(strict=True)
-        if not resolved.is_file():
+        if not resolved.is_file() or not os.access(resolved, os.X_OK):
             raise BuildError(f"unsafe tool executable: {name}")
         identities[name] = {"resolved_path": str(resolved),
-                            "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest()}
+                            "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+                            "version": _version_output(name, resolved, apple_toolchain_version)}
+    apple = {key: identities[f"apple.{key}"]["resolved_path"] for key in apple}
     return ToolInventory(sdkroot, sdk_version, apple, host, identities)
 
 
@@ -143,8 +192,10 @@ def expand_options(record: DependencyRecord, paths: BuildPaths, jobs: int,
 
 
 def _environment(record: DependencyRecord, paths: BuildPaths, tools: ToolInventory) -> dict[str, str]:
+    apple = _pinned_tools(tools.apple, tools.identities, "apple")
+    host = _pinned_tools(tools.host, tools.identities, "host")
     tool_dirs = []
-    for value in (*tools.apple.values(), *tools.host.values(), "/usr/bin/xcrun",
+    for value in (*apple.values(), *host.values(), "/usr/bin/xcrun",
                   "/usr/bin/sh", "/bin/sh"):
         directory = str(Path(value).parent)
         if directory not in tool_dirs:
@@ -157,10 +208,16 @@ def _environment(record: DependencyRecord, paths: BuildPaths, tools: ToolInvento
         "ZERO_AR_DATE": "1",
         "SDKROOT": tools.sdkroot,
         "MACOSX_DEPLOYMENT_TARGET": record.platform.deployment_target,
-        "CC": tools.apple["cc"], "CXX": tools.apple["cxx"],
-        "AR": tools.apple["ar"], "RANLIB": tools.apple["ranlib"],
+        "CC": apple["cc"], "CXX": apple["cxx"],
+        "AR": apple["ar"], "RANLIB": apple["ranlib"],
         "LC_ALL": "C", "LANG": "C",
     }
+
+
+def _pinned_tools(paths: Mapping[str, str],
+                  identities: Mapping[str, Mapping[str, str]], kind: str) -> dict[str, str]:
+    return {name: identities.get(f"{kind}.{name}", {}).get("resolved_path", path)
+            for name, path in paths.items()}
 
 
 def adapter_argv(record: DependencyRecord, paths: BuildPaths,
@@ -325,6 +382,11 @@ def _cleanup_stage(stage: Path, expected_identity):
 
 
 def _rename_atx(parent_fd: int, first: str, second: str, flags: int):
+    _rename_between_atx(parent_fd, first, parent_fd, second, flags)
+
+
+def _rename_between_atx(source_fd: int, first: str,
+                        destination_fd: int, second: str, flags: int):
     library = ctypes.CDLL(None, use_errno=True)
     try:
         rename = library.renameatx_np
@@ -332,7 +394,7 @@ def _rename_atx(parent_fd: int, first: str, second: str, flags: int):
         raise BuildError("atomic prefix publication requires macOS renameatx_np") from error
     rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
     rename.restype = ctypes.c_int
-    if rename(parent_fd, os.fsencode(first), parent_fd, os.fsencode(second), flags):
+    if rename(source_fd, os.fsencode(first), destination_fd, os.fsencode(second), flags):
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
 
@@ -408,40 +470,127 @@ def publish_prefix(stage: Path, target: Path, prefix_root: Path,
         raise BuildError("prefix root identity changed during publication") from error
 
 
-def _prefix_snapshots(prefix_root: Path, excluded: set[str]) -> dict[str, str]:
+def _prefix_snapshots(prefix_root: Path, excluded: set[str]) -> dict[str, PrefixSnapshot]:
     snapshots = {}
     if not prefix_root.exists():
         return snapshots
     for path in prefix_root.iterdir():
-        if path.name in excluded or path.name.startswith(".staging-"):
+        if path.name in excluded:
             continue
         if path.is_symlink() or not path.is_dir():
             raise BuildError(f"unsafe accepted prefix: {path.name}")
-        snapshots[path.name] = tree_digest(path)
+        identity = _identity(path)
+        if identity is None:
+            raise BuildError(f"unsafe accepted prefix: {path.name}")
+        snapshots[path.name] = PrefixSnapshot(identity, tree_digest(path))
     return snapshots
 
 
-def _assert_snapshots(prefix_root: Path, snapshots: Mapping[str, str]):
-    current = _prefix_snapshots(prefix_root, set())
+def _assert_snapshots(prefix_root: Path, snapshots: Mapping[str, PrefixSnapshot],
+                      excluded: set[str]):
+    current = _prefix_snapshots(prefix_root, excluded)
     if current != snapshots:
         raise BuildError("cross-prefix write detected")
-    for name, digest in snapshots.items():
+    for name, snapshot in snapshots.items():
         path = prefix_root / name
-        if not path.is_dir() or path.is_symlink() or tree_digest(path) != digest:
+        if (not path.is_dir() or path.is_symlink()
+                or _identity(path) != snapshot.identity
+                or tree_digest(path) != snapshot.digest):
             raise BuildError(f"cross-prefix write detected: {name}")
 
 
-def _restore_snapshots(prefix_root: Path, backup: Path, stage_name: str):
-    with OwnedDirectory(prefix_root) as owned:
-        owned.check()
-        for name in os.listdir(owned.fd):
-            if name == stage_name or name.startswith("."):
-                continue
-            _remove_at(owned.fd, name)
-        for saved in backup.iterdir():
+def _identity_name(parent_fd: int, expected: tuple[int, int, int]) -> str | None:
+    for name in os.listdir(parent_fd):
+        try:
+            item = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        identity = item.st_dev, item.st_ino, stat.S_IFMT(item.st_mode)
+        if identity == expected:
+            return name
+    return None
+
+
+def _restore_snapshots(prefix_root: Path, backup: Path, stage_name: str,
+                       stage_identity: tuple[int, int, int],
+                       snapshots: Mapping[str, PrefixSnapshot]):
+    with OwnedDirectory(prefix_root.parent) as parent, OwnedDirectory(prefix_root) as owned:
+        quarantine_fd = None
+
+        def quarantine(name: str):
+            nonlocal quarantine_fd
+            parent.check()
             owned.check()
-            shutil.copytree(saved, prefix_root / saved.name, symlinks=True)
+            if quarantine_fd is None:
+                quarantine_name = ".prefix-quarantine-" + secrets.token_hex(16)
+                os.mkdir(quarantine_name, 0o700, dir_fd=parent.fd)
+                quarantine_fd = os.open(quarantine_name, os.O_RDONLY | os.O_DIRECTORY
+                                        | os.O_NOFOLLOW, dir_fd=parent.fd)
+            expected = os.stat(name, dir_fd=owned.fd, follow_symlinks=False)
+            _rename_between_atx(owned.fd, name, quarantine_fd, name, 0x00000004)
+            moved = os.stat(name, dir_fd=quarantine_fd, follow_symlinks=False)
+            if (moved.st_dev, moved.st_ino, stat.S_IFMT(moved.st_mode)) != (
+                    expected.st_dev, expected.st_ino, stat.S_IFMT(expected.st_mode)):
+                raise BuildError(f"substituted prefix identity changed during quarantine: {name}")
+
+        try:
+            _restore_snapshots_owned(prefix_root, backup, stage_name, stage_identity,
+                                     snapshots, owned, quarantine)
+        finally:
+            if quarantine_fd is not None:
+                os.close(quarantine_fd)
+
+
+def _restore_snapshots_owned(prefix_root: Path, backup: Path, stage_name: str,
+                             stage_identity: tuple[int, int, int],
+                             snapshots: Mapping[str, PrefixSnapshot],
+                             owned: OwnedDirectory, quarantine: Callable[[str], None]):
+    owned.check()
+    for name, snapshot in snapshots.items():
+        current = _identity(prefix_root / name)
+        if (current == snapshot.identity
+                and tree_digest(prefix_root / name) == snapshot.digest):
+            continue
+        original_name = _identity_name(owned.fd, snapshot.identity)
+        if original_name == name:
+            _remove_at(owned.fd, name)
+            shutil.copytree(backup / name, prefix_root / name, symlinks=True)
+            continue
+        if original_name is not None:
+            if current == stage_identity and original_name == stage_name:
+                _rename_swap(owned.fd, stage_name, name)
+                continue
+            if current is not None:
+                if current == stage_identity:
+                    stage_current = _identity(prefix_root / stage_name)
+                    if stage_current is not None:
+                        quarantine(stage_name)
+                    _rename_atx(owned.fd, name, stage_name, 0x00000004)
+                else:
+                    quarantine(name)
+            _rename_atx(owned.fd, original_name, name, 0x00000004)
+            continue
+        if current is not None:
+            quarantine(name)
+        shutil.copytree(backup / name, prefix_root / name, symlinks=True)
+
+    for name in os.listdir(owned.fd):
+        if name in snapshots:
+            continue
+        if name == stage_name and _identity(prefix_root / name) == stage_identity:
+            continue
+        if _identity(prefix_root / name) == stage_identity:
+            _remove_at(owned.fd, name)
+        else:
+            quarantine(name)
+
+    for name, snapshot in snapshots.items():
         owned.check()
+        path = prefix_root / name
+        if (not path.is_dir() or path.is_symlink()
+                or tree_digest(path) != snapshot.digest):
+            raise BuildError(f"failed to restore protected prefix: {name}")
+    owned.check()
 
 
 def _check_attempt_history(evidence_owner: OwnedDirectory, attempts: Path,
@@ -517,7 +666,7 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                         and fingerprint_file.read_text() == fingerprint_value + "\n"):
                     try:
                         report = validate_prefix(record, target, _allowed_roots(fingerprint_paths),
-                                                 tools=tools.apple)
+                                                 tools=_pinned_tools(tools.apple, tools.identities, "apple"))
                     except PrefixError as error:
                         raise BuildError(f"{record.name}: accepted output drift: {error}") from error
                     else:
@@ -566,15 +715,16 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                                    attempts_digest, history_backup)
             _write(evidence / "exit-status.txt", f"{status}\n", evidence_owner)
             try:
-                _assert_snapshots(prefix_root, protected)
+                _assert_snapshots(prefix_root, protected, {stage.name})
             except (BuildError, PrefixError, OSError) as error:
-                _restore_snapshots(prefix_root, backup, stage.name)
+                _restore_snapshots(prefix_root, backup, stage.name, stage_identity, protected)
                 raise BuildError("cross-prefix write detected and restored") from error
             if status:
                 raise BuildError(f"{record.name}: adapter failed; inspect {evidence / 'adapter.log'}")
             validated_identity = _identity(stage)
             validated_digest = tree_digest(stage)
-            report = validate_prefix(record, stage, _allowed_roots(paths), tools=tools.apple)
+            report = validate_prefix(record, stage, _allowed_roots(paths),
+                                     tools=_pinned_tools(tools.apple, tools.identities, "apple"))
             if _identity(stage) != validated_identity or tree_digest(stage) != validated_digest:
                 raise BuildError("validated staging tree changed during validation")
             _write(evidence / "prefix-report.json", _canonical_json(report.as_dict()), evidence_owner)
@@ -589,7 +739,7 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                 nonlocal final_report
                 evidence_owner.check()
                 checked = validate_prefix(record, target, _allowed_roots(paths),
-                                          tools=tools.apple)
+                                          tools=_pinned_tools(tools.apple, tools.identities, "apple"))
                 if checked.manifest != report.manifest:
                     raise BuildError("validated staging report changed during publication")
                 _write(evidence / "input-fingerprint.txt", fingerprint_value + "\n",
@@ -606,9 +756,9 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
             except (AcquireError, BuildError, OSError):
                 pass
             try:
-                _assert_snapshots(prefix_root, protected)
+                _assert_snapshots(prefix_root, protected, {stage.name})
             except (BuildError, PrefixError, OSError):
-                _restore_snapshots(prefix_root, backup, stage.name)
+                _restore_snapshots(prefix_root, backup, stage.name, stage_identity, protected)
             try:
                 evidence_owner.check()
                 try:

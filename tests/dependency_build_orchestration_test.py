@@ -289,6 +289,57 @@ class PrefixValidationTests(unittest.TestCase):
         prefix.validate_prefix(configured, root, self.roots)
 
 
+class ToolResolutionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if sys.platform != "darwin":
+            raise unittest.SkipTest("tool resolution requires macOS")
+
+    def test_poisoned_ambient_path_cannot_select_host_tools(self):
+        with tempfile.TemporaryDirectory(prefix="airdc-poison-tools-") as directory:
+            poison = Path(directory)
+            for name in ("cmake", "ninja", "perl", "make"):
+                fake = poison / name
+                fake.write_text("#!/bin/sh\nexit 99\n")
+                fake.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": str(poison) + ":/usr/bin:/bin"}):
+                inventory = build.resolve_tool_inventory()
+            for name in ("cmake", "ninja", "perl", "make"):
+                with self.subTest(name=name):
+                    self.assertFalse(Path(inventory.host[name]).is_relative_to(poison))
+                    self.assertFalse(Path(inventory.identities[f"host.{name}"]["resolved_path"])
+                                     .is_relative_to(poison))
+
+    def test_real_inventory_records_version_for_each_resolved_tool(self):
+        inventory = build.resolve_tool_inventory()
+        self.assertEqual(len(inventory.identities), 13)
+        for name, identity in inventory.identities.items():
+            with self.subTest(name=name):
+                self.assertTrue(identity["version"])
+                self.assertEqual(len(identity["sha256"]), 64)
+
+    def test_same_executable_bytes_with_changed_version_output_changes_inventory(self):
+        with tempfile.TemporaryDirectory(prefix="airdc-tool-version-") as directory:
+            root = Path(directory)
+            version_file = root / "version.txt"
+            executable = root / "tool"
+            executable.write_text(f'#!/bin/sh\n/bin/cat "{version_file}"\n')
+            executable.chmod(0o755)
+            with patch.object(build, "_trusted_host_tool", return_value=executable):
+                version_file.write_text("first version\n")
+                first = build.resolve_tool_inventory()
+                version_file.write_text("second version\n")
+                second = build.resolve_tool_inventory()
+            before = first.identities["host.cmake"]
+            after = second.identities["host.cmake"]
+            self.assertEqual(before["resolved_path"], after["resolved_path"])
+            self.assertEqual(before["sha256"], after["sha256"])
+            self.assertEqual(before["version"], "first version")
+            self.assertEqual(after["version"], "second version")
+            self.assertNotEqual(build._canonical_json(build.asdict(first)),
+                                build._canonical_json(build.asdict(second)))
+
+
 class OrchestrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -388,20 +439,43 @@ stage=$3
 
     def test_tool_inventory_changes_when_executable_changes_at_same_path(self):
         executable = self.project / "cmake"
-        executable.write_bytes(b"first")
+        executable.write_text("#!/bin/sh\necho first\n")
         executable.chmod(0o755)
-        apple = {name: "/usr/bin/" + name for name in
-                 ("cc", "cxx", "ar", "ranlib", "lipo", "nm", "otool", "strings")}
-        with patch.object(build, "_run_text", side_effect=lambda argv: (
-                "/SDK" if argv[-1] == "--show-sdk-path" else
-                "14.4" if argv[-1] == "--show-sdk-version" else
-                apple.get(next((key for key, value in apple.items()
-                                if argv[-1] == value.rsplit("/", 1)[-1]), ""), "/usr/bin/clang"))), \
-             patch.object(build.shutil, "which", return_value=str(executable)):
+        with patch.object(build, "_trusted_host_tool", return_value=executable):
             first = build.resolve_tool_inventory()
-            executable.write_bytes(b"second")
+            executable.write_text("#!/bin/sh\necho second\n")
             second = build.resolve_tool_inventory()
         self.assertNotEqual(build.asdict(first), build.asdict(second))
+
+    def test_retargeted_tool_links_cannot_replace_build_or_validator_executables(self):
+        inventory = build.resolve_tool_inventory()
+        tool_links = self.project / "tool-links"
+        tool_links.mkdir()
+        marker = self.project / "poison-ran"
+        poison = tool_links / "poison"
+        poison.write_text(f'#!/bin/sh\n/usr/bin/touch "{marker}"\nexit 99\n')
+        poison.chmod(0o755)
+        cmake_link = tool_links / "cmake"
+        ar_link = tool_links / "ar"
+        cmake_link.symlink_to(inventory.host["cmake"])
+        ar_link.symlink_to(inventory.apple["ar"])
+        self.tools = replace(
+            inventory,
+            host={**inventory.host, "cmake": str(cmake_link)},
+            apple={**inventory.apple, "ar": str(ar_link)},
+        )
+        cmake_link.unlink()
+        cmake_link.symlink_to(poison)
+        ar_link.unlink()
+        ar_link.symlink_to(poison)
+        self.write_adapter("a", 'cmake --version > "$build/cmake-version.txt"\n')
+
+        self.invoke(DependencyLock(1, (self.records[0],)))
+
+        self.assertFalse(marker.exists())
+        self.assertIn("cmake version", (self.project /
+                      "Build/dependencies/a/build/cmake-version.txt").read_text())
+        self.assertTrue((self.project / "Build/prefix/a/lib/libfixture.a").is_file())
 
     def test_matching_fingerprint_and_revalidated_prefix_is_a_noop(self):
         self.invoke()
@@ -414,6 +488,22 @@ stage=$3
              patch.object(build, "job_count", return_value=3):
             build.build_all(self.project, self.lock)
         self.assertEqual(before, (evidence.stat().st_mtime_ns, prefix.tree_digest(accepted)))
+
+    def test_same_path_tool_version_change_invalidates_accepted_fingerprint(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        identity = {"resolved_path": "/opt/homebrew/bin/cmake",
+                    "sha256": "0" * 64, "version": "first version"}
+        self.tools = replace(self.tools, identities={"host.cmake": identity})
+        self.invoke(only_a)
+        evidence = self.project / "Build/dependencies/a/evidence"
+        first = (evidence / "input-fingerprint.txt").read_bytes()
+        identity = {**identity, "version": "second version"}
+        self.tools = replace(self.tools, identities={"host.cmake": identity})
+
+        self.invoke(only_a)
+
+        self.assertNotEqual((evidence / "input-fingerprint.txt").read_bytes(), first)
+        self.assertEqual((evidence / "attempts/0001/input-fingerprint.txt").read_bytes(), first)
 
     def test_changed_accepted_header_is_not_reused_with_stale_evidence(self):
         only_a = DependencyLock(1, (self.records[0],))
@@ -568,6 +658,28 @@ stage=$3
         with self.assertRaisesRegex(build.BuildError, "cross-prefix write"):
             self.invoke(DependencyLock(1, (self.records[0],)))
         self.assertFalse((self.project / "Build/prefix/a").exists())
+
+    def test_failed_adapter_restores_complete_prefix_root_after_hidden_addition(self):
+        self.invoke()
+        prefix_root = self.project / "Build/prefix"
+        accepted = prefix_root / "a"
+        evidence = self.project / "Build/dependencies/a/evidence"
+        outside = self.project / "outside"
+        outside.mkdir()
+        sentinel = outside / "sentinel"
+        sentinel.write_bytes(b"untouched")
+        root_before = prefix.tree_digest(prefix_root)
+        accepted_before = prefix.tree_digest(accepted)
+        evidence_before = prefix.tree_digest(evidence)
+        self.write_adapter("b", '/bin/mkdir -p "$(/usr/bin/dirname "$stage")/.intruder"\nexit 7\n')
+
+        with self.assertRaisesRegex(build.BuildError, "cross-prefix write"):
+            self.invoke()
+
+        self.assertEqual(prefix.tree_digest(prefix_root), root_before)
+        self.assertEqual(prefix.tree_digest(accepted), accepted_before)
+        self.assertEqual(prefix.tree_digest(evidence), evidence_before)
+        self.assertEqual(sentinel.read_bytes(), b"untouched")
 
     def test_existing_component_symlink_cannot_redirect_evidence(self):
         outside = self.project / "outside"
@@ -739,6 +851,8 @@ stage=$3
     def test_stage_replaced_after_validation_preserves_previous_acceptance(self):
         only_a = DependencyLock(1, (self.records[0],))
         self.invoke(only_a)
+        prefix_root = self.project / "Build/prefix"
+        root_before = prefix.tree_digest(prefix_root)
         accepted = self.project / "Build/prefix/a"
         evidence = self.project / "Build/dependencies/a/evidence"
         old_digest = prefix.tree_digest(accepted)
@@ -756,14 +870,20 @@ stage=$3
             with self.assertRaises(build.BuildError):
                 self.invoke(only_a)
         self.assertEqual(prefix.tree_digest(accepted), old_digest)
+        self.assertEqual(prefix.tree_digest(prefix_root), root_before)
+        self.assertEqual(sorted(path.name for path in prefix_root.iterdir()), ["a"])
         self.assertEqual((evidence / "attempts/0001/input-fingerprint.txt").read_bytes(),
                          old_fingerprint)
 
     def test_target_replaced_during_exchange_restores_previous_prefix(self):
         only_a = DependencyLock(1, (self.records[0],))
         self.invoke(only_a)
+        prefix_root = self.project / "Build/prefix"
         accepted = self.project / "Build/prefix/a"
         before = prefix.tree_digest(accepted)
+        root_before = prefix.tree_digest(prefix_root)
+        evidence = self.project / "Build/dependencies/a/evidence"
+        old_fingerprint = (evidence / "input-fingerprint.txt").read_bytes()
         self.write_adapter("a", '/usr/bin/printf "new\\n" >> "$stage/LICENSE"\n')
         original = build._rename_swap
         swapped = False
@@ -783,7 +903,47 @@ stage=$3
             with self.assertRaises(build.BuildError):
                 self.invoke(only_a)
         self.assertEqual(prefix.tree_digest(accepted), before)
+        self.assertEqual(prefix.tree_digest(prefix_root), root_before)
+        self.assertEqual(sorted(path.name for path in prefix_root.iterdir()), ["a"])
+        self.assertEqual((evidence / "attempts/0001/input-fingerprint.txt").read_bytes(),
+                         old_fingerprint)
         self.assertEqual((outside / "sentinel").read_bytes(), b"untouched")
+
+    def test_exchange_rollback_preserves_substituted_nonowned_directory(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.invoke(only_a)
+        prefix_root = self.project / "Build/prefix"
+        root_before = prefix.tree_digest(prefix_root)
+        accepted = prefix_root / "a"
+        outside = self.project / "outside"
+        outside.mkdir()
+        intruder = outside / "intruder"
+        intruder.mkdir()
+        (intruder / "marker").write_bytes(b"keep this identity")
+        intruder_identity = build._identity(intruder)
+        self.write_adapter("a", '/usr/bin/printf "new\\n" >> "$stage/LICENSE"\n')
+        original = build._rename_swap
+        swapped = False
+
+        def substitute(parent_fd, first, second):
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                accepted.rename(prefix_root / ".prior-a")
+                intruder.rename(accepted)
+            return original(parent_fd, first, second)
+
+        with patch.object(build, "_rename_swap", side_effect=substitute):
+            with self.assertRaises(build.BuildError):
+                self.invoke(only_a)
+
+        self.assertEqual(prefix.tree_digest(prefix_root), root_before)
+        self.assertEqual(sorted(path.name for path in prefix_root.iterdir()), ["a"])
+        quarantines = tuple((self.project / "Build").glob(".prefix-quarantine-*"))
+        preserved = [path for root in quarantines for path in root.iterdir()
+                     if build._identity(path) == intruder_identity]
+        self.assertEqual(len(preserved), 1)
+        self.assertEqual((preserved[0] / "marker").read_bytes(), b"keep this identity")
 
 
 class BuildEntryPointTests(unittest.TestCase):
