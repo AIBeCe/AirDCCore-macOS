@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import ctypes
 from dataclasses import asdict, dataclass, field
 import hashlib
@@ -370,15 +371,143 @@ def _remove_at(parent_fd: int, name: str):
         os.unlink(name, dir_fd=parent_fd)
 
 
-def _cleanup_stage(stage: Path, expected_identity):
-    with OwnedDirectory(stage.parent) as owned:
-        if _identity(stage) != expected_identity:
-            return
-        quarantine = ".cleanup-" + secrets.token_hex(16)
-        _rename_atx(owned.fd, stage.name, quarantine, 0x00000004)
-        moved = os.stat(quarantine, dir_fd=owned.fd, follow_symlinks=False)
-        if (moved.st_dev, moved.st_ino, stat.S_IFMT(moved.st_mode)) == expected_identity:
-            _remove_at(owned.fd, quarantine)
+def _identity_at(parent_fd: int, name: str):
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def _check_open_directory(owner: OwnedDirectory):
+    """Verify the open object without reacquiring its possibly substituted path."""
+    info = os.fstat(owner.fd)
+    expected = owner.identities[owner.path]
+    if (info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)) != expected:
+        raise BuildError("owned build directory identity changed")
+
+
+def _directory_manifest_fd(root_fd: int) -> bytes:
+    entries = []
+
+    def visit(directory_fd: int, parent: tuple[str, ...]):
+        for name in sorted(os.listdir(directory_fd), key=os.fsencode):
+            relative_parts = (*parent, name)
+            relative = "/".join(relative_parts)
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            mode = info.st_mode
+            if stat.S_ISLNK(mode):
+                entries.append({"path": relative, "type": "symlink",
+                                "target": os.readlink(name, dir_fd=directory_fd)})
+            elif stat.S_ISDIR(mode):
+                entries.append({"path": relative, "type": "directory"})
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=directory_fd)
+                try:
+                    visit(child, relative_parts)
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(mode):
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                try:
+                    with os.fdopen(fd, "rb") as stream:
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    fd = -1
+                finally:
+                    if fd >= 0:
+                        os.close(fd)
+                entries.append({"path": relative, "type": "file", "sha256": digest,
+                                "executable": bool(mode & 0o111)})
+            else:
+                raise BuildError(f"unsafe prefix entry: {relative}")
+
+    visit(root_fd, ())
+    return b"".join((json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                    for entry in entries)
+
+
+def _tree_digest_fd(root_fd: int) -> str:
+    return hashlib.sha256(_directory_manifest_fd(root_fd)).hexdigest()
+
+
+def _child_digest(parent_fd: int, name: str) -> str:
+    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    try:
+        return _tree_digest_fd(child)
+    finally:
+        os.close(child)
+
+
+def _copy_directory_fd_to_path(source_fd: int, destination: Path):
+    destination.mkdir()
+    for name in sorted(os.listdir(source_fd), key=os.fsencode):
+        info = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        target = destination / name
+        if stat.S_ISDIR(info.st_mode):
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=source_fd)
+            try:
+                _copy_directory_fd_to_path(child, target)
+            finally:
+                os.close(child)
+        elif stat.S_ISREG(info.st_mode):
+            source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
+            try:
+                with os.fdopen(source, "rb") as input_stream, target.open("xb") as output_stream:
+                    shutil.copyfileobj(input_stream, output_stream)
+                source = -1
+            finally:
+                if source >= 0:
+                    os.close(source)
+            target.chmod(stat.S_IMODE(info.st_mode))
+        elif stat.S_ISLNK(info.st_mode):
+            target.symlink_to(os.readlink(name, dir_fd=source_fd))
+        else:
+            raise BuildError(f"unsafe protected prefix entry: {name}")
+
+
+def _copy_path_to_directory_fd(source: Path, destination_fd: int, name: str):
+    info = source.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise BuildError(f"unsafe protected prefix backup: {name}")
+    os.mkdir(name, stat.S_IMODE(info.st_mode), dir_fd=destination_fd)
+    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=destination_fd)
+    try:
+        for source_child in sorted(source.iterdir(), key=lambda item: os.fsencode(item.name)):
+            child_info = source_child.lstat()
+            if stat.S_ISDIR(child_info.st_mode):
+                _copy_path_to_directory_fd(source_child, child, source_child.name)
+            elif stat.S_ISREG(child_info.st_mode):
+                output = os.open(source_child.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                 | os.O_NOFOLLOW, stat.S_IMODE(child_info.st_mode), dir_fd=child)
+                try:
+                    with source_child.open("rb") as input_stream, os.fdopen(output, "wb") as output_stream:
+                        shutil.copyfileobj(input_stream, output_stream)
+                    output = -1
+                finally:
+                    if output >= 0:
+                        os.close(output)
+            elif stat.S_ISLNK(child_info.st_mode):
+                os.symlink(os.readlink(source_child), source_child.name, dir_fd=child)
+            else:
+                raise BuildError(f"unsafe protected prefix backup: {source_child.name}")
+    finally:
+        os.close(child)
+
+
+def _cleanup_stage_owned(prefix_owner: OwnedDirectory,
+                         expected_identity: tuple[int, int, int] | None):
+    if expected_identity is None:
+        return
+    _check_open_directory(prefix_owner)
+    current_name = _identity_name(prefix_owner.fd, expected_identity)
+    if current_name is None:
+        return
+    quarantine = ".cleanup-" + secrets.token_hex(16)
+    _rename_atx(prefix_owner.fd, current_name, quarantine, 0x00000004)
+    if _identity_at(prefix_owner.fd, quarantine) == expected_identity:
+        _remove_at(prefix_owner.fd, quarantine)
 
 
 def _rename_atx(parent_fd: int, first: str, second: str, flags: int):
@@ -470,32 +599,28 @@ def publish_prefix(stage: Path, target: Path, prefix_root: Path,
         raise BuildError("prefix root identity changed during publication") from error
 
 
-def _prefix_snapshots(prefix_root: Path, excluded: set[str]) -> dict[str, PrefixSnapshot]:
+def _prefix_snapshots(prefix_owner: OwnedDirectory,
+                      excluded: set[str]) -> dict[str, PrefixSnapshot]:
     snapshots = {}
-    if not prefix_root.exists():
-        return snapshots
-    for path in prefix_root.iterdir():
-        if path.name in excluded:
+    _check_open_directory(prefix_owner)
+    for name in os.listdir(prefix_owner.fd):
+        if name in excluded:
             continue
-        if path.is_symlink() or not path.is_dir():
-            raise BuildError(f"unsafe accepted prefix: {path.name}")
-        identity = _identity(path)
-        if identity is None:
-            raise BuildError(f"unsafe accepted prefix: {path.name}")
-        snapshots[path.name] = PrefixSnapshot(identity, tree_digest(path))
+        identity = _identity_at(prefix_owner.fd, name)
+        if identity is None or identity[2] != stat.S_IFDIR:
+            raise BuildError(f"unsafe accepted prefix: {name}")
+        snapshots[name] = PrefixSnapshot(identity, _child_digest(prefix_owner.fd, name))
     return snapshots
 
 
-def _assert_snapshots(prefix_root: Path, snapshots: Mapping[str, PrefixSnapshot],
+def _assert_snapshots(prefix_owner: OwnedDirectory, snapshots: Mapping[str, PrefixSnapshot],
                       excluded: set[str]):
-    current = _prefix_snapshots(prefix_root, excluded)
+    current = _prefix_snapshots(prefix_owner, excluded)
     if current != snapshots:
         raise BuildError("cross-prefix write detected")
     for name, snapshot in snapshots.items():
-        path = prefix_root / name
-        if (not path.is_dir() or path.is_symlink()
-                or _identity(path) != snapshot.identity
-                or tree_digest(path) != snapshot.digest):
+        if (_identity_at(prefix_owner.fd, name) != snapshot.identity
+                or _child_digest(prefix_owner.fd, name) != snapshot.digest):
             raise BuildError(f"cross-prefix write detected: {name}")
 
 
@@ -511,50 +636,49 @@ def _identity_name(parent_fd: int, expected: tuple[int, int, int]) -> str | None
     return None
 
 
-def _restore_snapshots(prefix_root: Path, backup: Path, stage_name: str,
+def _restore_snapshots(build_owner: OwnedDirectory, prefix_owner: OwnedDirectory,
+                       backup: Path, stage_name: str,
                        stage_identity: tuple[int, int, int],
                        snapshots: Mapping[str, PrefixSnapshot]):
-    with OwnedDirectory(prefix_root.parent) as parent, OwnedDirectory(prefix_root) as owned:
-        quarantine_fd = None
+    quarantine_fd = None
 
-        def quarantine(name: str):
-            nonlocal quarantine_fd
-            parent.check()
-            owned.check()
-            if quarantine_fd is None:
-                quarantine_name = ".prefix-quarantine-" + secrets.token_hex(16)
-                os.mkdir(quarantine_name, 0o700, dir_fd=parent.fd)
-                quarantine_fd = os.open(quarantine_name, os.O_RDONLY | os.O_DIRECTORY
-                                        | os.O_NOFOLLOW, dir_fd=parent.fd)
-            expected = os.stat(name, dir_fd=owned.fd, follow_symlinks=False)
-            _rename_between_atx(owned.fd, name, quarantine_fd, name, 0x00000004)
-            moved = os.stat(name, dir_fd=quarantine_fd, follow_symlinks=False)
-            if (moved.st_dev, moved.st_ino, stat.S_IFMT(moved.st_mode)) != (
-                    expected.st_dev, expected.st_ino, stat.S_IFMT(expected.st_mode)):
-                raise BuildError(f"substituted prefix identity changed during quarantine: {name}")
+    def quarantine(name: str):
+        nonlocal quarantine_fd
+        _check_open_directory(build_owner)
+        _check_open_directory(prefix_owner)
+        if quarantine_fd is None:
+            quarantine_name = ".prefix-quarantine-" + secrets.token_hex(16)
+            os.mkdir(quarantine_name, 0o700, dir_fd=build_owner.fd)
+            quarantine_fd = os.open(quarantine_name, os.O_RDONLY | os.O_DIRECTORY
+                                    | os.O_NOFOLLOW, dir_fd=build_owner.fd)
+        expected = _identity_at(prefix_owner.fd, name)
+        _rename_between_atx(prefix_owner.fd, name, quarantine_fd, name, 0x00000004)
+        moved = _identity_at(quarantine_fd, name)
+        if moved != expected:
+            raise BuildError(f"substituted prefix identity changed during quarantine: {name}")
 
-        try:
-            _restore_snapshots_owned(prefix_root, backup, stage_name, stage_identity,
-                                     snapshots, owned, quarantine)
-        finally:
-            if quarantine_fd is not None:
-                os.close(quarantine_fd)
+    try:
+        _restore_snapshots_owned(backup, stage_name, stage_identity,
+                                 snapshots, prefix_owner, quarantine)
+    finally:
+        if quarantine_fd is not None:
+            os.close(quarantine_fd)
 
 
-def _restore_snapshots_owned(prefix_root: Path, backup: Path, stage_name: str,
+def _restore_snapshots_owned(backup: Path, stage_name: str,
                              stage_identity: tuple[int, int, int],
                              snapshots: Mapping[str, PrefixSnapshot],
                              owned: OwnedDirectory, quarantine: Callable[[str], None]):
-    owned.check()
+    _check_open_directory(owned)
     for name, snapshot in snapshots.items():
-        current = _identity(prefix_root / name)
+        current = _identity_at(owned.fd, name)
         if (current == snapshot.identity
-                and tree_digest(prefix_root / name) == snapshot.digest):
+                and _child_digest(owned.fd, name) == snapshot.digest):
             continue
         original_name = _identity_name(owned.fd, snapshot.identity)
         if original_name == name:
             _remove_at(owned.fd, name)
-            shutil.copytree(backup / name, prefix_root / name, symlinks=True)
+            _copy_path_to_directory_fd(backup / name, owned.fd, name)
             continue
         if original_name is not None:
             if current == stage_identity and original_name == stage_name:
@@ -562,7 +686,7 @@ def _restore_snapshots_owned(prefix_root: Path, backup: Path, stage_name: str,
                 continue
             if current is not None:
                 if current == stage_identity:
-                    stage_current = _identity(prefix_root / stage_name)
+                    stage_current = _identity_at(owned.fd, stage_name)
                     if stage_current is not None:
                         quarantine(stage_name)
                     _rename_atx(owned.fd, name, stage_name, 0x00000004)
@@ -572,25 +696,24 @@ def _restore_snapshots_owned(prefix_root: Path, backup: Path, stage_name: str,
             continue
         if current is not None:
             quarantine(name)
-        shutil.copytree(backup / name, prefix_root / name, symlinks=True)
+        _copy_path_to_directory_fd(backup / name, owned.fd, name)
 
     for name in os.listdir(owned.fd):
         if name in snapshots:
             continue
-        if name == stage_name and _identity(prefix_root / name) == stage_identity:
+        if name == stage_name and _identity_at(owned.fd, name) == stage_identity:
             continue
-        if _identity(prefix_root / name) == stage_identity:
+        if _identity_at(owned.fd, name) == stage_identity:
             _remove_at(owned.fd, name)
         else:
             quarantine(name)
 
     for name, snapshot in snapshots.items():
-        owned.check()
-        path = prefix_root / name
-        if (not path.is_dir() or path.is_symlink()
-                or tree_digest(path) != snapshot.digest):
+        _check_open_directory(owned)
+        if (_identity_at(owned.fd, name) is None
+                or _child_digest(owned.fd, name) != snapshot.digest):
             raise BuildError(f"failed to restore protected prefix: {name}")
-    owned.check()
+    _check_open_directory(owned)
 
 
 def _check_attempt_history(evidence_owner: OwnedDirectory, attempts: Path,
@@ -686,17 +809,35 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
         options = expand_options(record, paths, jobs, tools, dependency_prefixes)
         env = _environment(record, paths, tools)
         argv = adapter_argv(record, paths, dependency_prefixes, jobs)
-        protected = _prefix_snapshots(prefix_root, {stage.name})
-        backup = Path(tempfile.mkdtemp(prefix="airdc-protected-prefixes-"))
-        for name in protected:
-            shutil.copytree(prefix_root / name, backup / name, symlinks=True)
-        evidence_owner = OwnedDirectory(evidence)
-        attempts = evidence / "attempts"
-        attempts_identity = _identity(attempts)
-        attempts_digest = tree_digest(attempts) if attempts_identity is not None else None
-        history_backup = Path(tempfile.mkdtemp(prefix="airdc-attempt-history-"))
-        if attempts_identity is not None:
-            shutil.copytree(attempts, history_backup / "attempts", symlinks=True)
+        ownership = ExitStack()
+        backup = None
+        history_backup = None
+        try:
+            build_owner = ownership.enter_context(OwnedDirectory(project_root / "Build"))
+            prefix_owner = ownership.enter_context(OwnedDirectory(prefix_root))
+            protected = _prefix_snapshots(prefix_owner, {stage.name})
+            backup = Path(tempfile.mkdtemp(prefix="airdc-protected-prefixes-"))
+            for name in protected:
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=prefix_owner.fd)
+                try:
+                    _copy_directory_fd_to_path(child, backup / name)
+                finally:
+                    os.close(child)
+            evidence_owner = OwnedDirectory(evidence)
+            attempts = evidence / "attempts"
+            attempts_identity = _identity(attempts)
+            attempts_digest = tree_digest(attempts) if attempts_identity is not None else None
+            history_backup = Path(tempfile.mkdtemp(prefix="airdc-attempt-history-"))
+            if attempts_identity is not None:
+                shutil.copytree(attempts, history_backup / "attempts", symlinks=True)
+        except Exception:
+            ownership.close()
+            if backup is not None:
+                shutil.rmtree(backup)
+            if history_backup is not None:
+                shutil.rmtree(history_backup)
+            raise
         status = 0
         try:
             _write(evidence / "inputs.json", _canonical_json(inputs), evidence_owner)
@@ -715,9 +856,12 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                                    attempts_digest, history_backup)
             _write(evidence / "exit-status.txt", f"{status}\n", evidence_owner)
             try:
-                _assert_snapshots(prefix_root, protected, {stage.name})
-            except (BuildError, PrefixError, OSError) as error:
-                _restore_snapshots(prefix_root, backup, stage.name, stage_identity, protected)
+                build_owner.check()
+                prefix_owner.check()
+                _assert_snapshots(prefix_owner, protected, {stage.name})
+            except (AcquireError, BuildError, PrefixError, OSError) as error:
+                _restore_snapshots(build_owner, prefix_owner, backup, stage.name,
+                                   stage_identity, protected)
                 raise BuildError("cross-prefix write detected and restored") from error
             if status:
                 raise BuildError(f"{record.name}: adapter failed; inspect {evidence / 'adapter.log'}")
@@ -756,9 +900,12 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
             except (AcquireError, BuildError, OSError):
                 pass
             try:
-                _assert_snapshots(prefix_root, protected, {stage.name})
-            except (BuildError, PrefixError, OSError):
-                _restore_snapshots(prefix_root, backup, stage.name, stage_identity, protected)
+                build_owner.check()
+                prefix_owner.check()
+                _assert_snapshots(prefix_owner, protected, {stage.name})
+            except (AcquireError, BuildError, PrefixError, OSError):
+                _restore_snapshots(build_owner, prefix_owner, backup, stage.name,
+                                   stage_identity, protected)
             try:
                 evidence_owner.check()
                 try:
@@ -774,10 +921,13 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
             raise BuildError(f"{record.name}: dependency prefix validation failed: {error}") from error
         finally:
             evidence_owner.__exit__(None, None, None)
-            if stage and stage != Path() and stage.parent == prefix_root:
-                _cleanup_stage(stage, stage_identity)
-            shutil.rmtree(backup)
-            shutil.rmtree(history_backup)
+            try:
+                if stage and stage != Path() and stage.parent == prefix_root:
+                    _cleanup_stage_owned(prefix_owner, stage_identity)
+            finally:
+                ownership.close()
+                shutil.rmtree(backup)
+                shutil.rmtree(history_backup)
         accepted[record.name] = target
         reports[record.name] = final_report
 

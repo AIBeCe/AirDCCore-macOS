@@ -54,6 +54,22 @@ def run(*argv, cwd=None):
     subprocess.run(argv, cwd=cwd, check=True, capture_output=True)
 
 
+def filesystem_state(root: Path):
+    """Capture every entry without following links for exact restoration checks."""
+    entries = []
+    for path in sorted(root.rglob("*"), key=lambda item: os.fsencode(item.relative_to(root))):
+        relative = path.relative_to(root).as_posix()
+        mode = path.lstat().st_mode
+        if path.is_symlink():
+            detail = ("symlink", os.readlink(path))
+        elif path.is_dir():
+            detail = ("directory",)
+        else:
+            detail = ("file", hashlib.sha256(path.read_bytes()).hexdigest(), mode & 0o777)
+        entries.append((relative, *detail))
+    return tuple(entries)
+
+
 def make_archive(destination: Path, architecture="arm64", embedded="clean",
                  minimum="14.0", target=None):
     source = destination.with_suffix(".c")
@@ -680,6 +696,153 @@ stage=$3
         self.assertEqual(prefix.tree_digest(accepted), accepted_before)
         self.assertEqual(prefix.tree_digest(evidence), evidence_before)
         self.assertEqual(sentinel.read_bytes(), b"untouched")
+
+    def test_failed_adapter_build_ancestor_substitution_preserves_both_trees(self):
+        self.invoke()
+        build_root = self.project / "Build"
+        original_prefix = build_root / "prefix"
+        prefix_before = filesystem_state(original_prefix)
+        prefix_digest_before = prefix.tree_digest(original_prefix)
+        accepted_before = filesystem_state(original_prefix / "a")
+        evidence_before = filesystem_state(build_root / "dependencies/a/evidence")
+        accepted_fingerprint = (build_root / "dependencies/b/evidence/input-fingerprint.txt").read_bytes()
+        replacement = self.project / "replacement-build"
+        (replacement / "prefix/victim").mkdir(parents=True)
+        (replacement / "prefix/victim/marker").write_bytes(b"foreign build replacement")
+        (replacement / "sentinel").write_bytes(b"keep replacement intact")
+        replacement_identity = build._identity(replacement)
+        replacement_before = filesystem_state(replacement)
+        self.write_adapter(
+            "b",
+            'build_root="$(/usr/bin/dirname "$(/usr/bin/dirname "$(/usr/bin/dirname "$build")")")"\n'
+            '/bin/mv "$build_root" "${build_root}-original"\n'
+            f'/bin/mv "{replacement}" "$build_root"\n'
+            'exit 7\n',
+        )
+
+        with self.assertRaises(build.BuildError):
+            self.invoke()
+
+        moved_build = self.project / "Build-original"
+        moved_prefix = moved_build / "prefix"
+        self.assertEqual(build._identity(build_root), replacement_identity)
+        self.assertEqual(filesystem_state(build_root), replacement_before)
+        self.assertEqual((build_root / "sentinel").read_bytes(), b"keep replacement intact")
+        self.assertEqual(filesystem_state(moved_prefix), prefix_before)
+        self.assertEqual(prefix.tree_digest(moved_prefix), prefix_digest_before)
+        self.assertEqual(filesystem_state(moved_prefix / "a"), accepted_before)
+        self.assertEqual(filesystem_state(moved_build / "dependencies/a/evidence"), evidence_before)
+        self.assertEqual((moved_build / "dependencies/b/evidence/attempts/0001/input-fingerprint.txt").read_bytes(),
+                         accepted_fingerprint)
+        self.assertFalse(any(path.name.startswith((".staging-", ".prior-", ".cleanup-"))
+                             for path in moved_prefix.iterdir()))
+        self.assertEqual(tuple(build_root.glob(".prefix-quarantine-*")), ())
+        self.assertEqual(tuple(moved_build.glob(".prefix-quarantine-*")), ())
+
+    def test_successful_adapter_build_ancestor_substitution_fails_closed(self):
+        self.invoke()
+        build_root = self.project / "Build"
+        prefix_before = filesystem_state(build_root / "prefix")
+        prefix_digest_before = prefix.tree_digest(build_root / "prefix")
+        accepted_fingerprint = (build_root / "dependencies/b/evidence/input-fingerprint.txt").read_bytes()
+        replacement = self.project / "replacement-build"
+        (replacement / "prefix/victim").mkdir(parents=True)
+        (replacement / "prefix/victim/marker").write_bytes(b"foreign build replacement")
+        replacement_identity = build._identity(replacement)
+        replacement_before = filesystem_state(replacement)
+        self.write_adapter(
+            "b",
+            'build_root="$(/usr/bin/dirname "$(/usr/bin/dirname "$(/usr/bin/dirname "$build")")")"\n'
+            '/bin/mv "$build_root" "${build_root}-original"\n'
+            f'/bin/mv "{replacement}" "$build_root"\n',
+        )
+
+        with self.assertRaises(build.BuildError):
+            self.invoke()
+
+        self.assertEqual(build._identity(build_root), replacement_identity)
+        self.assertEqual(filesystem_state(build_root), replacement_before)
+        moved_prefix = self.project / "Build-original/prefix"
+        self.assertEqual(filesystem_state(moved_prefix), prefix_before)
+        self.assertEqual(prefix.tree_digest(moved_prefix), prefix_digest_before)
+        self.assertEqual((self.project / "Build-original/dependencies/b/evidence/attempts/0001/input-fingerprint.txt").read_bytes(),
+                         accepted_fingerprint)
+        self.assertFalse(any(path.name.startswith((".staging-", ".prior-", ".cleanup-"))
+                             for path in moved_prefix.iterdir()))
+
+    def test_failed_adapter_prefix_root_substitution_preserves_both_roots(self):
+        self.invoke()
+        build_root = self.project / "Build"
+        prefix_root = build_root / "prefix"
+        prefix_before = filesystem_state(prefix_root)
+        prefix_digest_before = prefix.tree_digest(prefix_root)
+        accepted_before = filesystem_state(prefix_root / "a")
+        evidence_before = filesystem_state(build_root / "dependencies/a/evidence")
+        accepted_fingerprint = (build_root / "dependencies/b/evidence/input-fingerprint.txt").read_bytes()
+        replacement = self.project / "replacement-prefix"
+        (replacement / "victim").mkdir(parents=True)
+        (replacement / "victim/marker").write_bytes(b"foreign prefix replacement")
+        (replacement / "sentinel").write_bytes(b"keep replacement intact")
+        replacement_identity = build._identity(replacement)
+        replacement_before = filesystem_state(replacement)
+        self.write_adapter(
+            "b",
+            'prefix_root="$(/usr/bin/dirname "$stage")"\n'
+            '/bin/mv "$prefix_root" "${prefix_root}-original"\n'
+            f'/bin/mv "{replacement}" "$prefix_root"\n'
+            'exit 7\n',
+        )
+
+        with self.assertRaises(build.BuildError):
+            self.invoke()
+
+        original = build_root / "prefix-original"
+        self.assertEqual(build._identity(prefix_root), replacement_identity)
+        self.assertEqual(filesystem_state(prefix_root), replacement_before)
+        self.assertEqual((prefix_root / "sentinel").read_bytes(), b"keep replacement intact")
+        self.assertEqual(filesystem_state(original), prefix_before)
+        self.assertEqual(prefix.tree_digest(original), prefix_digest_before)
+        self.assertEqual(filesystem_state(original / "a"), accepted_before)
+        self.assertEqual(filesystem_state(build_root / "dependencies/a/evidence"), evidence_before)
+        self.assertEqual((build_root / "dependencies/b/evidence/attempts/0001/input-fingerprint.txt").read_bytes(),
+                         accepted_fingerprint)
+        self.assertFalse(any(path.name.startswith((".staging-", ".prior-", ".cleanup-"))
+                             for path in original.iterdir()))
+        self.assertEqual(tuple(build_root.glob(".prefix-quarantine-*")), ())
+
+    def test_successful_adapter_prefix_root_substitution_fails_closed(self):
+        self.invoke()
+        build_root = self.project / "Build"
+        prefix_root = build_root / "prefix"
+        prefix_before = filesystem_state(prefix_root)
+        prefix_digest_before = prefix.tree_digest(prefix_root)
+        evidence_before = filesystem_state(build_root / "dependencies/a/evidence")
+        accepted_fingerprint = (build_root / "dependencies/b/evidence/input-fingerprint.txt").read_bytes()
+        replacement = self.project / "replacement-prefix"
+        (replacement / "victim").mkdir(parents=True)
+        (replacement / "victim/marker").write_bytes(b"foreign prefix replacement")
+        replacement_identity = build._identity(replacement)
+        replacement_before = filesystem_state(replacement)
+        self.write_adapter(
+            "b",
+            'prefix_root="$(/usr/bin/dirname "$stage")"\n'
+            '/bin/mv "$prefix_root" "${prefix_root}-original"\n'
+            f'/bin/mv "{replacement}" "$prefix_root"\n',
+        )
+
+        with self.assertRaises(build.BuildError):
+            self.invoke()
+
+        original = build_root / "prefix-original"
+        self.assertEqual(build._identity(prefix_root), replacement_identity)
+        self.assertEqual(filesystem_state(prefix_root), replacement_before)
+        self.assertEqual(filesystem_state(original), prefix_before)
+        self.assertEqual(prefix.tree_digest(original), prefix_digest_before)
+        self.assertEqual(filesystem_state(build_root / "dependencies/a/evidence"), evidence_before)
+        self.assertEqual((build_root / "dependencies/b/evidence/attempts/0001/input-fingerprint.txt").read_bytes(),
+                         accepted_fingerprint)
+        self.assertFalse(any(path.name.startswith((".staging-", ".prior-", ".cleanup-"))
+                             for path in original.iterdir()))
 
     def test_existing_component_symlink_cannot_redirect_evidence(self):
         outside = self.project / "outside"
