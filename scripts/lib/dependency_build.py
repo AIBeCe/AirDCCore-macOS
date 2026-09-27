@@ -5,17 +5,18 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
-from typing import Mapping
+from typing import Callable, Mapping
 
 from dependency_acquire import AcquireError, OwnedDirectory, _identity, acquire_all
 from dependency_lock import (DependencyLock, DependencyRecord, LockError,
@@ -40,6 +41,7 @@ class ToolInventory:
     sdk_version: str
     apple: Mapping[str, str]
     host: Mapping[str, str]
+    identities: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -67,16 +69,28 @@ def resolve_tool_inventory() -> ToolInventory:
         "cc": "clang", "cxx": "clang++", "ar": "ar", "ranlib": "ranlib",
         "lipo": "lipo", "nm": "nm", "otool": "otool", "strings": "strings",
     }
-    apple = {key: _run_text(("xcrun", "--find", name)) for key, name in apple_names.items()}
-    sdkroot = _run_text(("xcrun", "--sdk", "macosx", "--show-sdk-path"))
-    sdk_version = _run_text(("xcrun", "--sdk", "macosx", "--show-sdk-version"))
+    xcrun = "/usr/bin/xcrun"
+    apple = {key: _run_text((xcrun, "--find", name)) for key, name in apple_names.items()}
+    sdkroot = _run_text((xcrun, "--sdk", "macosx", "--show-sdk-path"))
+    sdk_version = _run_text((xcrun, "--sdk", "macosx", "--show-sdk-version"))
     host = {}
     for name in ("cmake", "ninja", "perl", "make"):
         path = shutil.which(name)
         if path is None:
             raise BuildError(f"missing required host tool: {name}")
         host[name] = os.path.abspath(path)
-    return ToolInventory(sdkroot, sdk_version, apple, host)
+    if not Path(xcrun).is_file():
+        raise BuildError("missing required Apple tool: xcrun")
+    identities = {}
+    for name, path in {**{f"apple.{key}": value for key, value in apple.items()},
+                       **{f"host.{key}": value for key, value in host.items()},
+                       "xcrun": xcrun}.items():
+        resolved = Path(path).resolve(strict=True)
+        if not resolved.is_file():
+            raise BuildError(f"unsafe tool executable: {name}")
+        identities[name] = {"resolved_path": str(resolved),
+                            "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest()}
+    return ToolInventory(sdkroot, sdk_version, apple, host, identities)
 
 
 def job_count() -> int:
@@ -130,7 +144,8 @@ def expand_options(record: DependencyRecord, paths: BuildPaths, jobs: int,
 
 def _environment(record: DependencyRecord, paths: BuildPaths, tools: ToolInventory) -> dict[str, str]:
     tool_dirs = []
-    for value in (*tools.apple.values(), *tools.host.values(), "/usr/bin/xcrun"):
+    for value in (*tools.apple.values(), *tools.host.values(), "/usr/bin/xcrun",
+                  "/usr/bin/sh", "/bin/sh"):
         directory = str(Path(value).parent)
         if directory not in tool_dirs:
             tool_dirs.append(directory)
@@ -167,11 +182,29 @@ def _canonical_json(value) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def _write(path: Path, data: bytes | str):
+def _write(path: Path, data: bytes | str, owner: OwnedDirectory | None = None):
     raw = data.encode() if isinstance(data, str) else data
-    temporary = path.with_name("." + path.name + ".tmp")
-    temporary.write_bytes(raw)
-    os.replace(temporary, path)
+    if owner is None:
+        with OwnedDirectory(path.parent) as opened:
+            _write(path, raw, opened)
+        return
+    owner.check()
+    temporary = "." + path.name + "." + secrets.token_hex(16) + ".tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                 0o600, dir_fd=owner.fd)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        owner.check()
+        os.replace(temporary, path.name, src_dir_fd=owner.fd, dst_dir_fd=owner.fd)
+        owner.check()
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=owner.fd)
+        except FileNotFoundError:
+            pass
 
 
 def _input_document(lock: DependencyLock, record: DependencyRecord, adapter: Path,
@@ -191,32 +224,79 @@ def _input_document(lock: DependencyLock, record: DependencyRecord, adapter: Pat
     }
 
 
+def _accepted_evidence_matches(record: DependencyRecord, target: Path,
+                               evidence: Path, report: PrefixReport) -> bool:
+    expected = {
+        "prefix-report.json": _canonical_json(report.as_dict()),
+        "install-manifest.jsonl": report.manifest.encode(),
+        "license-inventory.json": _canonical_json([
+            {"path": "$PREFIX/" + relative,
+             "sha256": hashlib.sha256((target / relative).read_bytes()).hexdigest()}
+            for relative in record.license_paths]),
+        "exit-status.txt": b"0\n",
+    }
+    for name, content in expected.items():
+        path = evidence / name
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != content:
+            return False
+    return True
+
+
 def _archive_evidence(evidence: Path):
     if not evidence.exists():
         return
-    attempts = evidence / "attempts"
-    if attempts.is_symlink() or (attempts.exists() and not attempts.is_dir()):
-        raise BuildError("unsafe evidence attempt history")
-    items = sorted((path for path in evidence.iterdir() if path.name != "attempts"),
-                   key=lambda item: os.fsencode(item.name))
-    if not items:
-        return
-    attempts.mkdir(exist_ok=True)
-    number = 1
-    while (attempts / f"{number:04d}").exists():
-        number += 1
-    destination = attempts / f"{number:04d}"
-    destination.mkdir()
-    hashes = []
-    for item in items:
-        if item.is_symlink() or not item.is_file():
-            raise BuildError(f"unsafe evidence item before retry: {item.name}")
-        target = destination / item.name
-        shutil.copyfile(item, target)
-        hashes.append(f"{hashlib.sha256(target.read_bytes()).hexdigest()}  {item.name}\n")
-    (destination / "sha256.txt").write_text("".join(hashes))
-    for item in items:
-        item.unlink()
+    try:
+        with OwnedDirectory(evidence) as current:
+            items = sorted((name for name in os.listdir(current.fd) if name != "attempts"),
+                           key=os.fsencode)
+            if not items:
+                return
+            try:
+                os.mkdir("attempts", dir_fd=current.fd)
+            except FileExistsError:
+                pass
+            with OwnedDirectory(evidence / "attempts") as attempts:
+                number = 1
+                while _identity(evidence / "attempts" / f"{number:04d}") is not None:
+                    number += 1
+                pending = ".pending-" + secrets.token_hex(16)
+                os.mkdir(pending, 0o700, dir_fd=attempts.fd)
+                try:
+                    with OwnedDirectory(evidence / "attempts" / pending) as destination:
+                        hashes = []
+                        for name in items:
+                            source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW,
+                                                dir_fd=current.fd)
+                            try:
+                                if not stat.S_ISREG(os.fstat(source_fd).st_mode):
+                                    raise BuildError(f"unsafe evidence item before retry: {name}")
+                                target_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                                    | os.O_NOFOLLOW, 0o600, dir_fd=destination.fd)
+                                with os.fdopen(os.dup(source_fd), "rb") as source_stream, \
+                                     os.fdopen(target_fd, "wb") as target_stream:
+                                    shutil.copyfileobj(source_stream, target_stream)
+                                copied_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW,
+                                                    dir_fd=destination.fd)
+                                with os.fdopen(copied_fd, "rb") as copied:
+                                    digest = hashlib.file_digest(copied, "sha256").hexdigest()
+                                hashes.append(f"{digest}  {name}\n")
+                            finally:
+                                os.close(source_fd)
+                            current.check()
+                            attempts.check()
+                            destination.check()
+                        _write(evidence / "attempts" / pending / "sha256.txt",
+                               "".join(hashes), destination)
+                    attempts.check()
+                    current.check()
+                    _rename_atx(attempts.fd, pending, f"{number:04d}", 0x00000004)
+                    for name in items:
+                        os.unlink(name, dir_fd=current.fd)
+                finally:
+                    if _identity(evidence / "attempts" / pending) is not None:
+                        _remove_at(attempts.fd, pending)
+    except (AcquireError, OSError) as error:
+        raise BuildError("unsafe evidence attempt history") from error
 
 
 def _remove_at(parent_fd: int, name: str):
@@ -231,6 +311,17 @@ def _remove_at(parent_fd: int, name: str):
         os.rmdir(name, dir_fd=parent_fd)
     else:
         os.unlink(name, dir_fd=parent_fd)
+
+
+def _cleanup_stage(stage: Path, expected_identity):
+    with OwnedDirectory(stage.parent) as owned:
+        if _identity(stage) != expected_identity:
+            return
+        quarantine = ".cleanup-" + secrets.token_hex(16)
+        _rename_atx(owned.fd, stage.name, quarantine, 0x00000004)
+        moved = os.stat(quarantine, dir_fd=owned.fd, follow_symlinks=False)
+        if (moved.st_dev, moved.st_ino, stat.S_IFMT(moved.st_mode)) == expected_identity:
+            _remove_at(owned.fd, quarantine)
 
 
 def _rename_atx(parent_fd: int, first: str, second: str, flags: int):
@@ -250,7 +341,10 @@ def _rename_swap(parent_fd: int, first: str, second: str):
     _rename_atx(parent_fd, first, second, 0x00000002)  # RENAME_SWAP
 
 
-def publish_prefix(stage: Path, target: Path, prefix_root: Path):
+def publish_prefix(stage: Path, target: Path, prefix_root: Path,
+                   *, expected_stage: tuple[int, int, int] | None = None,
+                   expected_digest: str | None = None,
+                   finalize: Callable[[], None] | None = None):
     """Publish stage relative to a pinned parent and never follow a swapped root."""
     stage, target, prefix_root = map(Path, (stage, target, prefix_root))
     if stage.parent != prefix_root or target.parent != prefix_root:
@@ -262,6 +356,10 @@ def publish_prefix(stage: Path, target: Path, prefix_root: Path):
             try:
                 before = os.fstat(stage_fd)
                 identity = before.st_dev, before.st_ino
+                if expected_stage is not None and _identity(stage) != expected_stage:
+                    raise BuildError("validated staging identity changed before publication")
+                if expected_digest is not None and tree_digest(stage) != expected_digest:
+                    raise BuildError("validated staging tree changed before publication")
                 existing = _identity(target)
                 owned.check()
                 published = False
@@ -276,12 +374,27 @@ def publish_prefix(stage: Path, target: Path, prefix_root: Path):
                     actual = os.stat(target.name, dir_fd=owned.fd, follow_symlinks=False)
                     if (actual.st_dev, actual.st_ino) != identity:
                         raise BuildError("staging identity changed before publication")
+                    if existing is not None and _identity(stage) != existing:
+                        raise BuildError("accepted target identity changed before publication")
+                    if expected_digest is not None and tree_digest(target) != expected_digest:
+                        raise BuildError("validated staging tree changed during publication")
                     owned.check()
-                except (AcquireError, BuildError, OSError):
+                    if finalize is not None:
+                        finalize()
+                    if _identity(target) is None or _identity(target)[:2] != identity:
+                        raise BuildError("published target identity changed before acceptance")
+                    if expected_digest is not None and tree_digest(target) != expected_digest:
+                        raise BuildError("published target tree changed before acceptance")
+                    owned.check()
+                except (AcquireError, BuildError, PrefixError, OSError):
                     if published:
                         if existing is None:
-                            _remove_at(owned.fd, target.name)
+                            if (_identity(target) is not None
+                                    and _identity(target)[:2] == identity):
+                                _remove_at(owned.fd, target.name)
                         else:
+                            if _identity(stage) != existing:
+                                raise BuildError("prior prefix identity changed before rollback")
                             _rename_swap(owned.fd, stage.name, target.name)
                     raise
                 os.fsync(owned.fd)
@@ -316,6 +429,33 @@ def _assert_snapshots(prefix_root: Path, snapshots: Mapping[str, str]):
         path = prefix_root / name
         if not path.is_dir() or path.is_symlink() or tree_digest(path) != digest:
             raise BuildError(f"cross-prefix write detected: {name}")
+
+
+def _restore_snapshots(prefix_root: Path, backup: Path, stage_name: str):
+    with OwnedDirectory(prefix_root) as owned:
+        owned.check()
+        for name in os.listdir(owned.fd):
+            if name == stage_name or name.startswith("."):
+                continue
+            _remove_at(owned.fd, name)
+        for saved in backup.iterdir():
+            owned.check()
+            shutil.copytree(saved, prefix_root / saved.name, symlinks=True)
+        owned.check()
+
+
+def _check_attempt_history(evidence_owner: OwnedDirectory, attempts: Path,
+                           expected_identity, expected_digest, backup: Path):
+    evidence_owner.check()
+    actual = _identity(attempts)
+    if actual == expected_identity and (actual is None or tree_digest(attempts) == expected_digest):
+        return
+    if actual is not None:
+        _remove_at(evidence_owner.fd, "attempts")
+    if expected_identity is not None:
+        shutil.copytree(backup / "attempts", attempts, symlinks=True)
+    evidence_owner.check()
+    raise BuildError("evidence attempt history changed and was restored")
 
 
 def _prepare_component(component: Path, evidence: Path):
@@ -369,18 +509,28 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
         inputs = _input_document(lock, record, adapter, dependency_reports, tools)
         fingerprint_value = hashlib.sha256(_canonical_json(inputs)).hexdigest()
         fingerprint_file = evidence / "input-fingerprint.txt"
-        if fingerprint_file.is_file() and fingerprint_file.read_text() == fingerprint_value + "\n":
-            try:
-                report = validate_prefix(record, target, _allowed_roots(fingerprint_paths))
-            except PrefixError:
-                pass
-            else:
-                accepted[record.name] = target
-                reports[record.name] = report
-                continue
+        if evidence.is_symlink() or (evidence.exists() and not evidence.is_dir()):
+            raise BuildError("unsafe build directory: evidence")
+        if evidence.exists():
+            with OwnedDirectory(evidence) as existing_evidence:
+                if (not fingerprint_file.is_symlink() and fingerprint_file.is_file()
+                        and fingerprint_file.read_text() == fingerprint_value + "\n"):
+                    try:
+                        report = validate_prefix(record, target, _allowed_roots(fingerprint_paths),
+                                                 tools=tools.apple)
+                    except PrefixError as error:
+                        raise BuildError(f"{record.name}: accepted output drift: {error}") from error
+                    else:
+                        if not _accepted_evidence_matches(record, target, evidence, report):
+                            raise BuildError(f"{record.name}: accepted output drift in evidence or prefix")
+                        existing_evidence.check()
+                        accepted[record.name] = target
+                        reports[record.name] = report
+                        continue
 
         _prepare_component(component, evidence)
         stage = Path(tempfile.mkdtemp(prefix=f".staging-{record.name}-", dir=prefix_root))
+        stage_identity = _identity(stage)
         paths = BuildPaths(project_root, source, component, component / "build", stage,
                            evidence, component / "home", component / "tmp")
         jobs = job_count()
@@ -388,42 +538,98 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
         env = _environment(record, paths, tools)
         argv = adapter_argv(record, paths, dependency_prefixes, jobs)
         protected = _prefix_snapshots(prefix_root, {stage.name})
-        _write(evidence / "inputs.json", _canonical_json(inputs))
-        _write(evidence / "tool-inventory.json", _canonical_json(asdict(tools)))
-        _write(evidence / "expanded-options.json", _canonical_json(options))
-        _write(evidence / "command.json", _canonical_json(argv))
+        backup = Path(tempfile.mkdtemp(prefix="airdc-protected-prefixes-"))
+        for name in protected:
+            shutil.copytree(prefix_root / name, backup / name, symlinks=True)
+        evidence_owner = OwnedDirectory(evidence)
+        attempts = evidence / "attempts"
+        attempts_identity = _identity(attempts)
+        attempts_digest = tree_digest(attempts) if attempts_identity is not None else None
+        history_backup = Path(tempfile.mkdtemp(prefix="airdc-attempt-history-"))
+        if attempts_identity is not None:
+            shutil.copytree(attempts, history_backup / "attempts", symlinks=True)
         status = 0
         try:
-            with (evidence / "adapter.log").open("wb") as log:
+            _write(evidence / "inputs.json", _canonical_json(inputs), evidence_owner)
+            _write(evidence / "tool-inventory.json", _canonical_json(asdict(tools)), evidence_owner)
+            _write(evidence / "expanded-options.json", _canonical_json(options), evidence_owner)
+            _write(evidence / "command.json", _canonical_json(argv), evidence_owner)
+            log_fd = os.open("adapter.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=evidence_owner.fd)
+            with os.fdopen(log_fd, "wb") as log:
                 try:
                     run_adapter(record, paths, dependency_prefixes, env, jobs=jobs, log=log)
                 except subprocess.CalledProcessError as error:
                     status = error.returncode
-            _write(evidence / "exit-status.txt", f"{status}\n")
+            evidence_owner.check()
+            _check_attempt_history(evidence_owner, attempts, attempts_identity,
+                                   attempts_digest, history_backup)
+            _write(evidence / "exit-status.txt", f"{status}\n", evidence_owner)
+            try:
+                _assert_snapshots(prefix_root, protected)
+            except (BuildError, PrefixError, OSError) as error:
+                _restore_snapshots(prefix_root, backup, stage.name)
+                raise BuildError("cross-prefix write detected and restored") from error
             if status:
                 raise BuildError(f"{record.name}: adapter failed; inspect {evidence / 'adapter.log'}")
-            _assert_snapshots(prefix_root, protected)
-            report = validate_prefix(record, stage, _allowed_roots(paths))
-            _write(evidence / "prefix-report.json", _canonical_json(report.as_dict()))
-            _write(evidence / "install-manifest.jsonl", report.manifest)
+            validated_identity = _identity(stage)
+            validated_digest = tree_digest(stage)
+            report = validate_prefix(record, stage, _allowed_roots(paths), tools=tools.apple)
+            if _identity(stage) != validated_identity or tree_digest(stage) != validated_digest:
+                raise BuildError("validated staging tree changed during validation")
+            _write(evidence / "prefix-report.json", _canonical_json(report.as_dict()), evidence_owner)
+            _write(evidence / "install-manifest.jsonl", report.manifest, evidence_owner)
             licenses = [{"path": "$PREFIX/" + relative,
                          "sha256": hashlib.sha256((stage / relative).read_bytes()).hexdigest()}
                         for relative in record.license_paths]
-            _write(evidence / "license-inventory.json", _canonical_json(licenses))
-            publish_prefix(stage, target, prefix_root)
+            _write(evidence / "license-inventory.json", _canonical_json(licenses), evidence_owner)
+            final_report = None
+
+            def finalize_publication():
+                nonlocal final_report
+                evidence_owner.check()
+                checked = validate_prefix(record, target, _allowed_roots(paths),
+                                          tools=tools.apple)
+                if checked.manifest != report.manifest:
+                    raise BuildError("validated staging report changed during publication")
+                _write(evidence / "input-fingerprint.txt", fingerprint_value + "\n",
+                       evidence_owner)
+                final_report = checked
+
+            publish_prefix(stage, target, prefix_root, expected_stage=validated_identity,
+                           expected_digest=validated_digest, finalize=finalize_publication)
             stage = Path()
-        except (BuildError, PrefixError, OSError) as error:
-            if not (evidence / "exit-status.txt").exists():
-                _write(evidence / "exit-status.txt", "1\n")
-            _write(evidence / "error.txt", f"{type(error).__name__}: {error}\n")
+        except (AcquireError, BuildError, PrefixError, OSError) as error:
+            try:
+                _check_attempt_history(evidence_owner, attempts, attempts_identity,
+                                       attempts_digest, history_backup)
+            except (AcquireError, BuildError, OSError):
+                pass
+            try:
+                _assert_snapshots(prefix_root, protected)
+            except (BuildError, PrefixError, OSError):
+                _restore_snapshots(prefix_root, backup, stage.name)
+            try:
+                evidence_owner.check()
+                try:
+                    os.unlink("input-fingerprint.txt", dir_fd=evidence_owner.fd)
+                except FileNotFoundError:
+                    pass
+                if not (evidence / "exit-status.txt").exists():
+                    _write(evidence / "exit-status.txt", "1\n", evidence_owner)
+                _write(evidence / "error.txt", f"{type(error).__name__}: {error}\n",
+                       evidence_owner)
+            except (AcquireError, OSError):
+                pass
             raise BuildError(f"{record.name}: dependency prefix validation failed: {error}") from error
         finally:
-            if stage and stage != Path() and stage.exists() and stage.parent == prefix_root:
-                shutil.rmtree(stage)
-        report = validate_prefix(record, target, _allowed_roots(paths))
-        _write(evidence / "input-fingerprint.txt", fingerprint_value + "\n")
+            evidence_owner.__exit__(None, None, None)
+            if stage and stage != Path() and stage.parent == prefix_root:
+                _cleanup_stage(stage, stage_identity)
+            shutil.rmtree(backup)
+            shutil.rmtree(history_backup)
         accepted[record.name] = target
-        reports[record.name] = report
+        reports[record.name] = final_report
 
 
 def main(argv=None) -> int:

@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import tempfile
 from typing import Mapping
@@ -105,6 +106,76 @@ def _safe_link(root: Path, path: Path):
         raise PrefixError(f"unsafe link: {path.relative_to(root)}")
 
 
+def _valid_cmake_syntax(text: str) -> bool:
+    """Parse command boundaries and argument quoting without evaluating commands."""
+    size = len(text)
+    position = 0
+
+    def skip_comment(at: int) -> int:
+        bracket = re.match(r"#\[(=*)\[", text[at:])
+        if bracket:
+            closing = "]" + bracket.group(1) + "]"
+            end = text.find(closing, at + len(bracket.group(0)))
+            return size + 1 if end < 0 else end + len(closing)
+        end = text.find("\n", at)
+        return size if end < 0 else end + 1
+
+    while position < size:
+        if text[position].isspace():
+            position += 1
+            continue
+        if text[position] == "#":
+            position = skip_comment(position)
+            continue
+        command = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[position:])
+        if not command:
+            return False
+        position += len(command.group(0))
+        while position < size and text[position].isspace():
+            position += 1
+        if position >= size or text[position] != "(":
+            return False
+        depth = 1
+        position += 1
+        while position < size and depth:
+            char = text[position]
+            if char == "#":
+                position = skip_comment(position)
+                continue
+            bracket = re.match(r"\[(=*)\[", text[position:])
+            if bracket:
+                closing = "]" + bracket.group(1) + "]"
+                end = text.find(closing, position + len(bracket.group(0)))
+                if end < 0:
+                    return False
+                position = end + len(closing)
+                continue
+            if char == '"':
+                position += 1
+                while position < size:
+                    if text[position] == "\\":
+                        position += 2
+                    elif text[position] == '"':
+                        position += 1
+                        break
+                    else:
+                        position += 1
+                else:
+                    return False
+                continue
+            if char == "\\":
+                position += 2
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            position += 1
+        if depth:
+            return False
+    return position == size
+
+
 def _validate_metadata(path: Path):
     try:
         text = path.read_text(encoding="utf-8")
@@ -114,14 +185,14 @@ def _validate_metadata(path: Path):
         raise PrefixError(f"malformed package metadata: {path.name}")
     if path.suffix == ".pc":
         fields = {}
-        for line in text.splitlines():
+        for line in re.sub(r"\\\r?\n", "", text).splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             delimiter = "=" if "=" in line and (":" not in line or line.index("=") < line.index(":")) else ":"
             key, separator, value = line.partition(delimiter)
-            if (not separator or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", key.strip())
-                    or not value.strip()):
+            key = key.strip()
+            if not separator or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", key):
                 raise PrefixError(f"malformed package metadata: {path.name}")
             if delimiter == ":":
                 if key in fields:
@@ -130,7 +201,7 @@ def _validate_metadata(path: Path):
         if not fields.get("Name") or not fields.get("Version"):
             raise PrefixError(f"malformed package metadata: {path.name}")
     elif path.suffix == ".cmake":
-        if text.count("(") != text.count(")") or text.count('"') % 2:
+        if not _valid_cmake_syntax(text):
             raise PrefixError(f"malformed package metadata: {path.name}")
 
 
@@ -158,12 +229,41 @@ def _symbols(output: str) -> tuple[str, ...]:
     return tuple(sorted(set(symbols)))
 
 
-def _inspect_archive(path: Path, relative: str, patterns: tuple[bytes, ...]) -> ArchiveReport:
-    ar = _apple_tool("ar")
-    lipo = _apple_tool("lipo")
-    nm = _apple_tool("nm")
-    otool = _apple_tool("otool")
-    strings = _apple_tool("strings")
+def _check_build_versions(output: str, relative: str, minimum: str) -> tuple[str, ...]:
+    found = []
+    required = tuple(int(part) for part in minimum.split("."))
+    for command in output.split("Load command"):
+        match = re.search(r"\bcmd (LC_BUILD_VERSION|LC_VERSION_MIN_[A-Z0-9_]+)\b", command)
+        if not match:
+            continue
+        name = match.group(1)
+        if name == "LC_BUILD_VERSION":
+            platform = re.search(r"\bplatform\s+(\S+)", command)
+            version = re.search(r"\bminos\s+(\d+(?:\.\d+){1,2})", command)
+            if not platform or platform.group(1).lower() not in ("1", "macos"):
+                raise PrefixError(f"wrong Apple platform in {relative}")
+        else:
+            if name != "LC_VERSION_MIN_MACOSX":
+                raise PrefixError(f"wrong Apple platform in {relative}")
+            version = re.search(r"\bversion\s+(\d+(?:\.\d+){1,2})", command)
+        if not version:
+            raise PrefixError(f"malformed build version in {relative}")
+        actual = tuple(int(part) for part in version.group(1).split("."))
+        width = max(len(actual), len(required))
+        if actual + (0,) * (width - len(actual)) > required + (0,) * (width - len(required)):
+            raise PrefixError(f"deployment target newer than {minimum} in {relative}")
+        found.extend(line.strip() for line in command.splitlines()
+                     if line.strip().startswith(("cmd ", "platform ", "minos ", "sdk ", "version ")))
+    return tuple(found)
+
+
+def _inspect_archive(path: Path, relative: str, patterns: tuple[bytes, ...],
+                     minimum: str, tools: Mapping[str, str]) -> ArchiveReport:
+    ar = tools["ar"]
+    lipo = tools["lipo"]
+    nm = tools["nm"]
+    otool = tools["otool"]
+    strings = tools["strings"]
     table = tuple(line for line in _run((ar, "-t", path), purpose=f"archive table {relative}").splitlines()
                   if line)
     if not table or len(set(table)) != len(table):
@@ -175,6 +275,7 @@ def _inspect_archive(path: Path, relative: str, patterns: tuple[bytes, ...]) -> 
     defined = set()
     undefined = set()
     versions = []
+    object_count = 0
     with tempfile.TemporaryDirectory(prefix="airdc-prefix-inspect-") as directory:
         inspection = Path(directory)
         _run((ar, "-x", path), cwd=inspection, purpose=f"archive extraction {relative}")
@@ -186,6 +287,11 @@ def _inspect_archive(path: Path, relative: str, patterns: tuple[bytes, ...]) -> 
             obj = inspection / member
             if not obj.is_file() or obj.is_symlink():
                 raise PrefixError(f"non-archive object: {relative}:{member}")
+            header = obj.read_bytes()[:16]
+            if (len(header) != 16 or header[:4] != b"\xcf\xfa\xed\xfe"
+                    or struct.unpack_from("<I", header, 12)[0] != 1):
+                raise PrefixError(f"archive member is not a relocatable object: {relative}:{member}")
+            object_count += 1
             archs = tuple(_run((lipo, "-archs", obj), purpose=f"archive architecture {relative}").split())
             if archs != ("arm64",):
                 raise PrefixError(f"wrong architecture in {relative}:{member}")
@@ -193,17 +299,18 @@ def _inspect_archive(path: Path, relative: str, patterns: tuple[bytes, ...]) -> 
             defined.update(_symbols(_run((nm, "-gU", obj), purpose=f"defined symbols {relative}")))
             undefined.update(_symbols(_run((nm, "-u", obj), purpose=f"undefined symbols {relative}")))
             load_commands = _run((otool, "-l", obj), purpose=f"build versions {relative}")
-            if "LC_BUILD_VERSION" in load_commands:
-                versions.extend(line.strip() for line in load_commands.splitlines()
-                                if line.strip().startswith(("cmd LC_BUILD_VERSION", "platform ", "minos ", "sdk ")))
+            versions.extend(_check_build_versions(load_commands, relative, minimum))
             string_output = _run((strings, obj), purpose=f"strings {relative}").encode()
             _reject_leaks(f"{relative}:{member}", obj.read_bytes() + b"\n" + string_output, patterns)
+    if not object_count:
+        raise PrefixError(f"archive has no relocatable object: {relative}")
     return ArchiveReport(relative, _sha(path), table, tuple(sorted(architectures)),
                          tuple(sorted(defined)), tuple(sorted(undefined)), tuple(versions))
 
 
 def validate_prefix(record: DependencyRecord, prefix: Path,
-                    allowed_roots: Mapping[str, Path]) -> PrefixReport:
+                    allowed_roots: Mapping[str, Path],
+                    *, tools: Mapping[str, str] | None = None) -> PrefixReport:
     """Validate and inventory a component prefix, failing closed on drift."""
     prefix = Path(os.path.abspath(prefix))
     try:
@@ -256,7 +363,10 @@ def validate_prefix(record: DependencyRecord, prefix: Path,
         if relative in expected_metadata:
             _validate_metadata(path)
 
-    archives = tuple(_inspect_archive(prefix / relative, relative, patterns)
+    inspection_tools = tools or {name: _apple_tool(name) for name in
+                                 ("ar", "lipo", "nm", "otool", "strings")}
+    archives = tuple(_inspect_archive(prefix / relative, relative, patterns,
+                                      record.platform.deployment_target, inspection_tools)
                      for relative in record.expected_archives)
     raw_manifest = _entry_manifest(prefix)
     normalized_lines = []

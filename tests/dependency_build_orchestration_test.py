@@ -54,13 +54,16 @@ def run(*argv, cwd=None):
     subprocess.run(argv, cwd=cwd, check=True, capture_output=True)
 
 
-def make_archive(destination: Path, architecture="arm64", embedded="clean"):
+def make_archive(destination: Path, architecture="arm64", embedded="clean",
+                 minimum="14.0", target=None):
     source = destination.with_suffix(".c")
     obj = destination.with_suffix(".o")
     source.write_text(f'const char *fixture_path = "{embedded}"; int fixture(void) {{ return 42; }}\n')
     clang = subprocess.check_output(["xcrun", "--find", "clang"], text=True).strip()
     ar = subprocess.check_output(["xcrun", "--find", "ar"], text=True).strip()
-    run(clang, "-arch", architecture, "-mmacosx-version-min=14.0", "-c", str(source), "-o", str(obj))
+    platform_args = ("-target", target) if target else ("-arch", architecture,
+                     f"-mmacosx-version-min={minimum}")
+    run(clang, *platform_args, "-c", str(source), "-o", str(obj))
     run(ar, "rcs", str(destination), str(obj))
     source.unlink()
     obj.unlink()
@@ -110,6 +113,16 @@ class PrefixValidationTests(unittest.TestCase):
         self.assertEqual(report.archives[0].architectures, ("arm64",))
         self.assertIn("fixture", report.archives[0].defined_symbols)
 
+    def test_validator_uses_inventoried_inspection_tools(self):
+        self.valid_prefix()
+        names = ("ar", "lipo", "nm", "otool", "strings")
+        inventory = {name: subprocess.check_output(["xcrun", "--find", name],
+                                                    text=True).strip() for name in names}
+        with patch.object(prefix, "_apple_tool", side_effect=AssertionError("ambient resolution")):
+            report = prefix.validate_prefix(record(), self.accepted, self.roots,
+                                            tools=inventory)
+        self.assertEqual(report.archives[0].architectures, ("arm64",))
+
     def test_missing_expected_output_and_forbidden_or_foreign_outputs_are_rejected(self):
         cases = {
             "missing expected": lambda p: (p / "include/fixture.h").unlink(),
@@ -152,6 +165,70 @@ class PrefixValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(prefix.PrefixError, "archive"):
             prefix.validate_prefix(record(), bogus, self.roots)
 
+    def test_archive_rejects_arm64_dylib_member(self):
+        root = self.valid_prefix(self.project / "dylib-member")
+        source = self.project / "member.c"
+        member = self.project / "member.dylib"
+        source.write_text("int fixture(void) { return 42; }\n")
+        clang = subprocess.check_output(["xcrun", "--find", "clang"], text=True).strip()
+        ar = subprocess.check_output(["xcrun", "--find", "ar"], text=True).strip()
+        sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
+        compiled = subprocess.run([clang, "-arch", "arm64", "-dynamiclib", "-install_name",
+                                   "@rpath/member.dylib", "-mmacosx-version-min=14.0",
+                                   "-isysroot", sdk, str(source), "-o", str(member)],
+                                  capture_output=True, text=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stderr)
+        archive = root / "lib/libfixture.a"
+        archive.unlink()
+        run(ar, "rcs", str(archive), str(member))
+        with self.assertRaisesRegex(prefix.PrefixError, "relocatable object"):
+            prefix.validate_prefix(record(), root, self.roots)
+
+    def test_archive_rejects_newer_macos_minimum(self):
+        root = self.valid_prefix(self.project / "newer-minimum")
+        make_archive(root / "lib/libfixture.a", minimum="15.0")
+        with self.assertRaisesRegex(prefix.PrefixError, "deployment target"):
+            prefix.validate_prefix(record(), root, self.roots)
+
+    def test_archive_rejects_ios_object(self):
+        root = self.valid_prefix(self.project / "ios-member")
+        make_archive(root / "lib/libfixture.a", target="arm64-apple-ios17.0")
+        with self.assertRaisesRegex(prefix.PrefixError, "platform"):
+            prefix.validate_prefix(record(), root, self.roots)
+
+    def test_archive_rejects_index_only_and_foreign_members(self):
+        ar = subprocess.check_output(["xcrun", "--find", "ar"], text=True).strip()
+        for kind in ("empty", "foreign"):
+            with self.subTest(kind=kind):
+                root = self.valid_prefix(self.project / f"archive-{kind}")
+                archive = root / "lib/libfixture.a"
+                archive.unlink()
+                if kind == "empty":
+                    archive.write_bytes(b"!<arch>\n")
+                else:
+                    member = self.project / "foreign.txt"
+                    member.write_text("not Mach-O\n")
+                    run(ar, "rcs", str(archive), str(member))
+                with self.assertRaises(prefix.PrefixError):
+                    prefix.validate_prefix(record(), root, self.roots)
+
+    def test_archive_rejects_mixed_object_and_foreign_member(self):
+        root = self.valid_prefix(self.project / "archive-mixed")
+        member = self.project / "foreign.txt"
+        member.write_text("not Mach-O\n")
+        ar = subprocess.check_output(["xcrun", "--find", "ar"], text=True).strip()
+        archive = root / "lib/libfixture.a"
+        payload = member.read_bytes()
+        header = (b"foreign.txt/".ljust(16) + b"0".ljust(12) + b"0".ljust(6)
+                  + b"0".ljust(6) + b"100644".ljust(8)
+                  + str(len(payload)).encode().ljust(10) + b"`\n")
+        archive.write_bytes(archive.read_bytes() + header + payload
+                            + (b"\n" if len(payload) % 2 else b""))
+        self.assertIn("foreign.txt", subprocess.check_output(
+            [ar, "-t", str(archive)], text=True))
+        with self.assertRaises(prefix.PrefixError):
+            prefix.validate_prefix(record(), root, self.roots)
+
     def test_source_build_home_and_homebrew_leakage_is_rejected(self):
         leaks = (str(self.project), str(self.source), str(self.build_root), str(self.home),
                  str(Path.home()), "/opt/homebrew", "/usr/local/Cellar/zlib", "Cellar/zlib")
@@ -180,6 +257,36 @@ class PrefixValidationTests(unittest.TestCase):
         (root / "lib/pkgconfig/fixture.pc").write_text("Name: fixture\nLibs: -lfixture\n")
         with self.assertRaisesRegex(prefix.PrefixError, "malformed package metadata"):
             prefix.validate_prefix(record(), root, self.roots)
+
+    def test_pkgconfig_accepts_empty_optional_fields_and_continuation(self):
+        root = self.valid_prefix(self.project / "optional-pc")
+        pc = root / "lib/pkgconfig/fixture.pc"
+        pc.write_text("prefix=${pcfiledir}/../..\nName: fixture\nDescription: test\n"
+                      "Version: 1.0\nRequires:\nLibs: -L${prefix}/lib \\\n+-lfixture\nLibs.private:\n")
+        checked = subprocess.run(["pkg-config", "--validate", str(pc)],
+                                 capture_output=True, text=True)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        prefix.validate_prefix(record(), root, self.roots)
+
+    def test_cmake_metadata_rejects_balanced_junk(self):
+        root = self.valid_prefix(self.project / "cmake-junk")
+        metadata = root / "lib/fixture-config.cmake"
+        metadata.write_text("not valid cmake\n")
+        configured = replace(record(), expected_metadata=(*record().expected_metadata,
+                                                         "lib/fixture-config.cmake"))
+        with self.assertRaisesRegex(prefix.PrefixError, "malformed package metadata"):
+            prefix.validate_prefix(configured, root, self.roots)
+
+    def test_cmake_metadata_accepts_comments_brackets_and_escaped_quote(self):
+        root = self.valid_prefix(self.project / "cmake-valid")
+        metadata = root / "lib/fixture-config.cmake"
+        metadata.write_text('# unbalanced ( " comment\n'
+                            '#[=[ unbalanced ) " bracket comment ]=]\n'
+                            'set(_fixture [==[text ) " inside bracket]==])\n'
+                            'set(_quoted "escaped \\" quote")\n')
+        configured = replace(record(), expected_metadata=(*record().expected_metadata,
+                                                         "lib/fixture-config.cmake"))
+        prefix.validate_prefix(configured, root, self.roots)
 
 
 class OrchestrationTests(unittest.TestCase):
@@ -271,6 +378,31 @@ stage=$3
         self.assertEqual(licenses, [{"path": "$PREFIX/LICENSE",
                                      "sha256": hashlib.sha256(b"MIT\n").hexdigest()}])
 
+    def test_restricted_environment_runs_unqualified_standard_commands(self):
+        self.write_adapter("a", 'sh -c \'mkdir -p "$1/probe"; cp "$2/LICENSE" "$1/probe/copy"; rm "$1/probe/copy"\' sh "$build" "$stage"\n')
+        with patch.dict(os.environ, {"PATH": "/private/tmp/unapproved:/usr/bin:/bin"}):
+            self.invoke(DependencyLock(1, (self.records[0],)))
+        self.assertTrue((self.project / "Build/dependencies/a/build/probe").is_dir())
+        environment = (self.project / "Build/dependencies/a/build/env.txt").read_text()
+        self.assertNotIn("/private/tmp/unapproved", environment)
+
+    def test_tool_inventory_changes_when_executable_changes_at_same_path(self):
+        executable = self.project / "cmake"
+        executable.write_bytes(b"first")
+        executable.chmod(0o755)
+        apple = {name: "/usr/bin/" + name for name in
+                 ("cc", "cxx", "ar", "ranlib", "lipo", "nm", "otool", "strings")}
+        with patch.object(build, "_run_text", side_effect=lambda argv: (
+                "/SDK" if argv[-1] == "--show-sdk-path" else
+                "14.4" if argv[-1] == "--show-sdk-version" else
+                apple.get(next((key for key, value in apple.items()
+                                if argv[-1] == value.rsplit("/", 1)[-1]), ""), "/usr/bin/clang"))), \
+             patch.object(build.shutil, "which", return_value=str(executable)):
+            first = build.resolve_tool_inventory()
+            executable.write_bytes(b"second")
+            second = build.resolve_tool_inventory()
+        self.assertNotEqual(build.asdict(first), build.asdict(second))
+
     def test_matching_fingerprint_and_revalidated_prefix_is_a_noop(self):
         self.invoke()
         evidence = self.project / "Build/dependencies/a/evidence"
@@ -282,6 +414,55 @@ stage=$3
              patch.object(build, "job_count", return_value=3):
             build.build_all(self.project, self.lock)
         self.assertEqual(before, (evidence.stat().st_mtime_ns, prefix.tree_digest(accepted)))
+
+    def test_changed_accepted_header_is_not_reused_with_stale_evidence(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.invoke(only_a)
+        accepted = self.project / "Build/prefix/a"
+        evidence = self.project / "Build/dependencies/a/evidence"
+        saved = (evidence / "install-manifest.jsonl").read_bytes()
+        (accepted / "include/fixture.h").write_text("int changed(void);\n")
+        with patch.object(build, "run_adapter", side_effect=AssertionError("adapter reran")):
+            with self.assertRaisesRegex(build.BuildError, "accepted output drift"):
+                self.invoke(only_a)
+        self.assertEqual((evidence / "install-manifest.jsonl").read_bytes(), saved)
+
+    def test_changed_archive_license_or_acceptance_evidence_refuses_reuse(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.invoke(only_a)
+        accepted = self.project / "Build/prefix/a"
+        evidence = self.project / "Build/dependencies/a/evidence"
+        cases = (
+            (accepted / "LICENSE", b"changed license\n"),
+            (evidence / "prefix-report.json", b"{}\n"),
+            (evidence / "install-manifest.jsonl", b""),
+        )
+        for path, replacement in cases:
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.write_bytes(replacement)
+                try:
+                    with patch.object(build, "run_adapter", side_effect=AssertionError("adapter reran")):
+                        with self.assertRaisesRegex(build.BuildError, "accepted output drift"):
+                            self.invoke(only_a)
+                finally:
+                    path.write_bytes(original)
+        archive = accepted / "lib/libfixture.a"
+        original = archive.read_bytes()
+        make_archive(archive, embedded="changed but valid")
+        try:
+            with self.assertRaisesRegex(build.BuildError, "accepted output drift"):
+                self.invoke(only_a)
+        finally:
+            archive.write_bytes(original)
+        missing = evidence / "license-inventory.json"
+        original = missing.read_bytes()
+        missing.unlink()
+        try:
+            with self.assertRaisesRegex(build.BuildError, "accepted output drift"):
+                self.invoke(only_a)
+        finally:
+            missing.write_bytes(original)
 
     def test_failure_preserves_prior_prefix_and_retry_archives_immutable_evidence(self):
         old = self.project / "Build/prefix/a"
@@ -314,11 +495,73 @@ stage=$3
         self.assertEqual(list(outside.iterdir()), [])
         self.assertEqual((evidence / "adapter.log").read_text(), "failed\n")
 
+    def test_retry_attempt_directory_swap_cannot_redirect_copy(self):
+        evidence = self.project / "Build/dependencies/a/evidence"
+        evidence.mkdir(parents=True)
+        (evidence / "adapter.log").write_bytes(b"previous")
+        outside = self.project / "outside"
+        outside.mkdir()
+        (outside / "0001").mkdir()
+        (outside / "sentinel").write_bytes(b"untouched")
+        original = build.shutil.copyfileobj
+        swapped = False
+
+        def redirect(source, destination, *args, **kwargs):
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                attempts = evidence / "attempts"
+                attempts.rename(evidence / "attempts-original")
+                attempts.symlink_to(outside, target_is_directory=True)
+            return original(source, destination, *args, **kwargs)
+
+        with patch.object(build.shutil, "copyfileobj", side_effect=redirect):
+            with self.assertRaises(build.BuildError):
+                self.invoke(DependencyLock(1, (self.records[0],)))
+        self.assertEqual((outside / "sentinel").read_bytes(), b"untouched")
+        self.assertEqual(list((outside / "0001").iterdir()), [])
+        self.assertEqual((evidence / "adapter.log").read_bytes(), b"previous")
+
+    def test_adapter_cannot_mutate_earlier_attempt_history(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.write_adapter("a", "exit 7\n")
+        with self.assertRaises(build.BuildError):
+            self.invoke(only_a)
+        self.write_adapter("a", 'printf "tampered" >> "$(dirname "$build")/evidence/attempts/0001/exit-status.txt"\n')
+        with self.assertRaisesRegex(build.BuildError, "attempt history"):
+            self.invoke(only_a)
+        attempt = self.project / "Build/dependencies/a/evidence/attempts/0001"
+        self.assertEqual((attempt / "exit-status.txt").read_bytes(), b"7\n")
+
     def test_cross_prefix_write_is_detected(self):
         self.invoke(DependencyLock(1, (self.records[0],)))
+        before = prefix.tree_digest(self.project / "Build/prefix/a")
         self.write_adapter("b", '/usr/bin/printf "tampered\\n" >> "$6/LICENSE"\n')
         with self.assertRaisesRegex(build.BuildError, "cross-prefix write"):
             self.invoke()
+        self.assertEqual(prefix.tree_digest(self.project / "Build/prefix/a"), before)
+
+    def test_failed_adapter_restores_deleted_dependency_prefix_file(self):
+        self.invoke(DependencyLock(1, (self.records[0],)))
+        accepted = self.project / "Build/prefix/a"
+        before = prefix.tree_digest(accepted)
+        self.write_adapter("b", '/bin/rm "$6/LICENSE"\nexit 7\n')
+        with self.assertRaisesRegex(build.BuildError, "cross-prefix write"):
+            self.invoke()
+        self.assertEqual(prefix.tree_digest(accepted), before)
+
+    def test_adapter_restores_new_files_and_prior_component_on_failure(self):
+        self.invoke()
+        accepted_a = self.project / "Build/prefix/a"
+        accepted_b = self.project / "Build/prefix/b"
+        before_a = prefix.tree_digest(accepted_a)
+        before_b = prefix.tree_digest(accepted_b)
+        self.write_adapter("b", 'printf "unexpected" > "$6/include/new.h"\n'
+                           f'printf "overwrite" > "{accepted_b}/LICENSE"\nexit 7\n')
+        with self.assertRaisesRegex(build.BuildError, "cross-prefix write"):
+            self.invoke()
+        self.assertEqual(prefix.tree_digest(accepted_a), before_a)
+        self.assertEqual(prefix.tree_digest(accepted_b), before_b)
 
     def test_adapter_cannot_create_another_accepted_prefix(self):
         self.write_adapter("a", '/bin/mkdir -p "$(/usr/bin/dirname "$stage")/intruder"\n')
@@ -335,6 +578,59 @@ stage=$3
         with self.assertRaisesRegex(build.BuildError, "unsafe build directory"):
             self.invoke(DependencyLock(1, (self.records[0],)))
         self.assertEqual(list(outside.iterdir()), [])
+
+    def test_reuse_refuses_symlinked_evidence_directory(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.invoke(only_a)
+        evidence = self.project / "Build/dependencies/a/evidence"
+        outside = self.project / "outside"
+        evidence.rename(outside)
+        evidence.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(build.BuildError, "unsafe.*evidence"):
+            self.invoke(only_a)
+
+    def test_adapter_time_evidence_swap_cannot_redirect_reports(self):
+        outside = self.project / "outside"
+        outside.mkdir()
+        sentinel = outside / "sentinel"
+        sentinel.write_bytes(b"untouched")
+        self.write_adapter("a", 'mv "$(dirname "$build")/evidence" "$(dirname "$build")/old-evidence"\n'
+                           f'ln -s "{outside}" "$(dirname "$build")/evidence"\n')
+        with self.assertRaisesRegex(build.BuildError, "identity changed"):
+            self.invoke(DependencyLock(1, (self.records[0],)))
+        self.assertEqual(sentinel.read_bytes(), b"untouched")
+        self.assertEqual(sorted(path.name for path in outside.iterdir()), ["sentinel"])
+
+    def test_adapter_time_component_swap_cannot_redirect_evidence(self):
+        outside = self.project / "outside"
+        outside.mkdir()
+        (outside / "sentinel").write_bytes(b"untouched")
+        self.write_adapter("a", 'component="$(dirname "$build")"\n'
+                           'mv "$component" "${component}-moved"\n'
+                           f'ln -s "{outside}" "$component"\n')
+        with self.assertRaisesRegex(build.BuildError, "identity changed"):
+            self.invoke(DependencyLock(1, (self.records[0],)))
+        self.assertEqual((outside / "sentinel").read_bytes(), b"untouched")
+        self.assertEqual(sorted(path.name for path in outside.iterdir()), ["sentinel"])
+
+    def test_predictable_temporary_symlink_cannot_redirect_evidence_write(self):
+        outside = self.project / "outside"
+        outside.mkdir()
+        sentinel = outside / "sentinel"
+        sentinel.write_bytes(b"untouched")
+        evidence = self.project / "Build/dependencies/a/evidence"
+        original = build.secrets.token_hex
+
+        def plant(length):
+            name = original(length)
+            if evidence.is_dir():
+                (evidence / f".inputs.json.{name}.tmp").symlink_to(sentinel)
+            return name
+
+        with patch.object(build.secrets, "token_hex", side_effect=plant):
+            with self.assertRaises((build.BuildError, OSError)):
+                self.invoke(DependencyLock(1, (self.records[0],)))
+        self.assertEqual(sentinel.read_bytes(), b"untouched")
 
     def test_failed_publication_does_not_mark_old_prefix_accepted(self):
         self.invoke(DependencyLock(1, (self.records[0],)))
@@ -439,6 +735,55 @@ stage=$3
             with self.assertRaisesRegex(build.BuildError, "staging identity changed"):
                 build.publish_prefix(stage, target, root)
         self.assertEqual((target / "marker").read_text(), "old\n")
+
+    def test_stage_replaced_after_validation_preserves_previous_acceptance(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.invoke(only_a)
+        accepted = self.project / "Build/prefix/a"
+        evidence = self.project / "Build/dependencies/a/evidence"
+        old_digest = prefix.tree_digest(accepted)
+        old_fingerprint = (evidence / "input-fingerprint.txt").read_bytes()
+        self.write_adapter("a", '/usr/bin/printf "new\\n" >> "$stage/LICENSE"\n')
+        original = build.publish_prefix
+
+        def replace_stage(stage, target, root, **kwargs):
+            stage.rename(stage.with_name(stage.name + "-hidden"))
+            stage.mkdir()
+            (stage / "unvalidated").write_text("bad\n")
+            return original(stage, target, root, **kwargs)
+
+        with patch.object(build, "publish_prefix", side_effect=replace_stage):
+            with self.assertRaises(build.BuildError):
+                self.invoke(only_a)
+        self.assertEqual(prefix.tree_digest(accepted), old_digest)
+        self.assertEqual((evidence / "attempts/0001/input-fingerprint.txt").read_bytes(),
+                         old_fingerprint)
+
+    def test_target_replaced_during_exchange_restores_previous_prefix(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.invoke(only_a)
+        accepted = self.project / "Build/prefix/a"
+        before = prefix.tree_digest(accepted)
+        self.write_adapter("a", '/usr/bin/printf "new\\n" >> "$stage/LICENSE"\n')
+        original = build._rename_swap
+        swapped = False
+        outside = self.project / "outside"
+        outside.mkdir()
+        (outside / "sentinel").write_bytes(b"untouched")
+
+        def substitute(parent_fd, first, second):
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                accepted.rename(accepted.with_name(".prior-a"))
+                accepted.symlink_to(outside, target_is_directory=True)
+            return original(parent_fd, first, second)
+
+        with patch.object(build, "_rename_swap", side_effect=substitute):
+            with self.assertRaises(build.BuildError):
+                self.invoke(only_a)
+        self.assertEqual(prefix.tree_digest(accepted), before)
+        self.assertEqual((outside / "sentinel").read_bytes(), b"untouched")
 
 
 class BuildEntryPointTests(unittest.TestCase):
