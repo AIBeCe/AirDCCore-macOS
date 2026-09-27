@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
+import ctypes
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
@@ -26,6 +27,26 @@ from dependency_lock import (DependencyLock, DependencyRecord, LockError,
 
 class AcquireError(ValueError):
     """Unsafe, unavailable, or drifted acquisition input."""
+
+
+def _publish_fd(source_fd: int, destination_fd: int, name: str):
+    """Atomic, no-clobber macOS publication of the verified open object.
+
+    Unlike renameat, fclonefileat never resolves the source's temporary name.
+    Its native atomicity covers both files and directory hierarchies. Fail closed
+    on filesystems without clone support instead of falling back to a pathname
+    rename with a source-substitution window.
+    """
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        clone = library.fclonefileat
+    except AttributeError as error:
+        raise AcquireError("atomic descriptor publication requires macOS clonefile support") from error
+    clone.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_int)
+    clone.restype = ctypes.c_int
+    if clone(source_fd, destination_fd, os.fsencode(name), 1):  # CLONE_NOFOLLOW
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
 
 
 def _sha(path: Path) -> str:
@@ -64,19 +85,42 @@ class OwnedDirectory:
         if (actual.st_dev, actual.st_ino) != self.identities[self.path][:2]:
             raise AcquireError("path identity changed before publication")
 
-    def publish(self, temporary: Path, target: str):
+    @contextmanager
+    def directory_fd(self, parts=(), create=False):
+        """Walk from the pinned root, never traversing a symlink component."""
+        fd = os.dup(self.fd)
+        try:
+            for part in parts:
+                if part in ("", ".", "..") or "/" in part:
+                    raise AcquireError("unsafe descriptor-relative path")
+                if create:
+                    try:
+                        os.mkdir(part, 0o755, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            yield fd
+        finally:
+            os.close(fd)
+
+    def publish(self, temporary: Path, target: str, source_fd: int):
         self.check()
-        temporary_identity = _identity(temporary)
-        if temporary_identity is None or temporary_identity[2] not in (stat.S_IFREG, stat.S_IFDIR):
+        info = os.fstat(source_fd)
+        temporary_identity = info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+        if (temporary_identity[2] not in (stat.S_IFREG, stat.S_IFDIR)
+                or _identity(temporary) != temporary_identity):
             raise AcquireError("path identity changed before publication")
         if _identity(self.path / target) is not None:
             raise AcquireError("path identity changed before publication")
         try:
-            os.replace(temporary.name, target, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+            _publish_fd(source_fd, self.fd, target)
         except OSError as error:
             raise AcquireError("path identity changed before publication") from error
         self.check()
-        if _identity(self.path / target) != temporary_identity:
+        published = _identity(self.path / target)
+        if published is None or published[2] != temporary_identity[2]:
             raise AcquireError("path identity changed before publication")
         os.fsync(self.fd)
 
@@ -224,38 +268,60 @@ def _licenses(root: Path, record: DependencyRecord):
             raise AcquireError(f"{record.name}: missing or unsafe license: {name}")
 
 
-def _set_times(root: Path, epoch: int):
-    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-        if ".git" not in path.relative_to(root).parts:
-            os.utime(path, (epoch, epoch), follow_symlinks=False)
-    os.utime(root, (epoch, epoch))
+def _set_times(root: Path | OwnedDirectory, epoch: int):
+    def visit(fd):
+        for name in os.listdir(fd):
+            if name == ".git":
+                continue
+            mode = os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode
+            if stat.S_ISDIR(mode):
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                try:
+                    visit(child)
+                finally:
+                    os.close(child)
+            else:
+                os.utime(name, (epoch, epoch), dir_fd=fd, follow_symlinks=False)
+        os.utime(fd, (epoch, epoch))
+    with (nullcontext(root) if isinstance(root, OwnedDirectory) else OwnedDirectory(root)) as owned:
+        owned.check()
+        visit(owned.fd)
+        owned.check()
 
 
-def _extract(archive: Path, plan: ArchivePlan, root: Path, record: DependencyRecord):
+def _extract(archive: Path, plan: ArchivePlan, root: OwnedDirectory, record: DependencyRecord):
+    root.check()
     with tarfile.open(archive, "r:*") as stream:
         for member in plan.members:
             relative = normalize_member(member.name).parts[1:]
             if not relative:
                 continue
-            target = root.joinpath(*relative)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if member.isdir():
-                target.mkdir(exist_ok=True)
-            elif member.isreg():
-                with stream.extractfile(member) as source, target.open("xb") as output:
-                    shutil.copyfileobj(source, output)
-                target.chmod(0o755 if member.mode & 0o111 else 0o644)
+            with root.directory_fd(relative[:-1], create=True) as parent:
+                if member.isdir():
+                    with root.directory_fd(relative, create=True):
+                        pass
+                elif member.isreg():
+                    fd = os.open(relative[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=parent)
+                    with stream.extractfile(member) as source, os.fdopen(fd, "wb") as output:
+                        shutil.copyfileobj(source, output)
+                        os.fchmod(output.fileno(), 0o755 if member.mode & 0o111 else 0o644)
         # Links are materialized last; no write ever traverses one.
         for member in plan.members:
             path = normalize_member(member.name)
-            target = root.joinpath(*path.parts[1:])
-            if member.issym():
-                target.symlink_to(member.linkname)
-            elif member.islnk():
-                linked = _link_target(path, member.linkname, True)
-                os.link(root.joinpath(*linked.parts[1:]), target)
-    _licenses(root, record)
-    if hashlib.sha256(tree_manifest(root)).hexdigest() != record.source.tree_manifest_sha256:
+            if not (member.issym() or member.islnk()):
+                continue
+            with root.directory_fd(path.parts[1:-1]) as parent:
+                if member.issym():
+                    os.symlink(member.linkname, path.name, dir_fd=parent)
+                else:
+                    linked = _link_target(path, member.linkname, True)
+                    with root.directory_fd(linked.parts[1:-1]) as source_parent:
+                        os.link(linked.name, path.name, src_dir_fd=source_parent,
+                                dst_dir_fd=parent, follow_symlinks=False)
+    root.check()
+    _licenses(root.path, record)
+    if hashlib.sha256(tree_manifest(root.path)).hexdigest() != record.source.tree_manifest_sha256:
         raise AcquireError(f"{record.name}: source tree manifest mismatch")
     _set_times(root, record.source_date_epoch)
 
@@ -298,15 +364,16 @@ def _download(cache: OwnedDirectory, record: DependencyRecord):
     temporary = Path(name)
     try:
         checksum = hashlib.sha256()
-        with os.fdopen(fd, "wb") as output, open_https(record.source.url) as response:
-            while chunk := response.read(1024 * 1024):
-                checksum.update(chunk)
-                output.write(chunk)
+        with os.fdopen(fd, "w+b") as output:
+            with open_https(record.source.url) as response:
+                while chunk := response.read(1024 * 1024):
+                    checksum.update(chunk)
+                    output.write(chunk)
             output.flush()
             os.fsync(output.fileno())
-        if checksum.hexdigest() != record.source.archive_sha256:
-            raise AcquireError(f"{record.name}: download checksum mismatch")
-        cache.publish(temporary, cache_name(record))
+            if checksum.hexdigest() != record.source.archive_sha256:
+                raise AcquireError(f"{record.name}: download checksum mismatch")
+            cache.publish(temporary, cache_name(record), output.fileno())
     finally:
         # Unlink through the pinned descriptor, even if the directory was renamed.
         try:
@@ -319,11 +386,13 @@ def _git(root: Path, *args: str) -> bytes:
     # No global configuration, URL rewrites, helpers, proxies, hooks or prompts.
     env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "SYSTEMROOT") if key in os.environ}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-               GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", LC_ALL="C")
+               GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0",
+               GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
     # This child-only home prevents libcurl falling back to the account's .netrc;
     # the operator's shell environment and actual home are never modified.
     env["HOME"] = os.devnull
     result = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "credential.helper=",
+                             "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null",
                              "-c", "http.proxy=", "-c", "http.followRedirects=false",
                              "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
                              "-c", "submodule.recurse=false", "-c", "core.autocrlf=false",
@@ -401,6 +470,16 @@ def _git_actual(root: Path) -> bytes:
 
 def _verify_git(root: Path, record: DependencyRecord, fresh=False):
     with OwnedDirectory(root / ".git"):
+        # Read without includes before running worktree commands. Status can
+        # invoke filters from local attributes, and command-valued config is not
+        # limited to hooks/fsmonitor. Only acquisition's inert init/origin keys
+        # are accepted; includes, extensions and unknown keys fail closed.
+        allowed = {"core.repositoryformatversion", "core.filemode", "core.bare",
+                   "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode",
+                   "remote.origin.url", "remote.origin.fetch"}
+        for entry in _git(root, "config", "--local", "--no-includes", "--null", "--list").split(b"\0"):
+            if entry and entry.split(b"\n", 1)[0].decode() not in allowed:
+                raise AcquireError(f"{record.name}: unsafe local Git configuration")
         if _git(root, "remote", "get-url", "--all", "origin").decode().splitlines() != [record.source.url]:
             raise AcquireError(f"{record.name}: Git origin drift")
         expected, links = _git_expected(root, record)
@@ -435,6 +514,16 @@ def _prepare_git(root: Path, record: DependencyRecord, cache_path: Path | None):
     _set_times(root, record.source_date_epoch)
 
 
+def _verify_git_cache(cache_path: Path, record: DependencyRecord):
+    # An existing checkout must never supply objects missing from the bundle.
+    # Reconstruct in an empty private repository and verify the full object
+    # graph, pinned commit, locked tree and each materialized blob independently.
+    with tempfile.TemporaryDirectory(prefix="airdc-bundle-check-") as directory:
+        root = Path(directory).resolve()
+        _prepare_git(root, record, cache_path)
+        _git(root, "fsck", "--full", "--no-reflogs")
+
+
 def acquire_all(project_root: Path, lock: DependencyLock, offline: bool) -> None:
     project_root = Path(os.path.abspath(project_root))
     records = topological_records(lock)
@@ -459,6 +548,8 @@ def acquire_all(project_root: Path, lock: DependencyLock, offline: bool) -> None
                     _regular(cache_path)
                     if record.source.kind == "archive" and _sha(cache_path) != record.source.archive_sha256:
                         raise AcquireError(f"{record.name}: cache checksum mismatch")
+                    if record.source.kind == "git":
+                        _verify_git_cache(cache_path, record)
                 else:
                     missing.append(record.name)
                 identity = _identity(source)
@@ -492,25 +583,25 @@ def acquire_all(project_root: Path, lock: DependencyLock, offline: bool) -> None
                 try:
                     if record.source.kind == "archive":
                         plan = inspect_archive(cached, record)
-                        _extract(cached, plan, staging, record)
+                        _extract(cached, plan, stage_owner, record)
                     else:
                         _prepare_git(staging, record, cached if cached.exists() else None)
                         if not cached.exists():
                             fd, name = tempfile.mkstemp(prefix=".partial-", dir=downloads)
-                            os.close(fd)
                             temporary = Path(name)
                             try:
-                                _git(staging, "bundle", "create", str(temporary), "HEAD")
-                                with temporary.open("rb") as stream:
+                                with os.fdopen(fd, "w+b") as stream:
+                                    stream.write(_git(staging, "bundle", "create", "-", "HEAD"))
+                                    stream.flush()
                                     os.fsync(stream.fileno())
-                                cache.publish(temporary, cached.name)
+                                    cache.publish(temporary, cached.name, stream.fileno())
                             finally:
                                 try:
                                     os.unlink(temporary.name, dir_fd=cache.fd)
                                 except FileNotFoundError:
                                     pass
                     stage_owner.check()
-                    owned.publish(staging, record.name)
+                    owned.publish(staging, record.name, stage_owner.fd)
                 finally:
                     # Never recurse through a changed project path on failure.
                     try:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Hermetic acquisition contracts: only transport is substituted, never validation."""
 import contextlib
+import errno
 from dataclasses import replace
 import hashlib
 import importlib
@@ -229,13 +230,129 @@ class AcquisitionTests(unittest.TestCase):
         original = self.a._extract
         def substitute(*args):
             original(*args)
-            staging = args[2]
+            staging = getattr(args[2], "path", args[2])
             staging.rename(staging.with_name(staging.name + "-original"))
             staging.mkdir()
         with patch.object(self.a, "_extract", side_effect=substitute):
             with self.assertRaisesRegex(self.a.AcquireError, "path identity changed before publication"):
                 self.acquire(record)
         self.assertFalse((self.project / "Dependencies/fixture").exists())
+
+    def test_staging_swap_before_extraction_leaves_outside_unchanged(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "marker").write_bytes(b"keep")
+        before = self.a.tree_manifest(outside), outside.stat().st_mtime_ns
+        original = self.a._extract
+        def substitute(*args):
+            staging = getattr(args[2], "path", args[2])
+            staging.rename(staging.with_name(staging.name + "-original"))
+            staging.symlink_to(outside, target_is_directory=True)
+            return original(*args)
+        with patch.object(self.a, "_extract", side_effect=substitute):
+            with self.assertRaises(self.a.AcquireError):
+                self.acquire(record)
+        self.assertEqual((self.a.tree_manifest(outside), outside.stat().st_mtime_ns), before)
+
+    def test_concurrent_cache_publication_preserves_winner_inode(self):
+        archive, record = self.archive()
+        original = self.a._publish_fd
+        winner = None
+        def publish_winner(src, dst, *args, **kwargs):
+            nonlocal winner
+            if winner is None:
+                winner = self.cache(archive, record).stat().st_ino
+            return original(src, dst, *args, **kwargs)
+        with patch.object(self.a, "open_https", return_value=io.BytesIO(archive.read_bytes())), \
+             patch.object(self.a, "_publish_fd", side_effect=publish_winner):
+            try:
+                self.acquire(record, False)
+            except self.a.AcquireError:
+                pass
+        self.assertIsNotNone(winner)
+        cached = self.project / "Dependencies/.downloads" / self.a.cache_name(record)
+        self.assertEqual(cached.stat().st_ino, winner, "publication clobbered another accepted cache")
+
+    def test_extraction_remains_contained_after_initial_identity_check(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "marker").write_bytes(b"keep")
+        before = self.a.tree_manifest(outside), outside.stat().st_mtime_ns
+        original = self.a._extract
+        def swap_after_check(archive, plan, owner, record):
+            checked = owner.check
+            swapped = False
+            def check():
+                nonlocal swapped
+                checked()
+                if not swapped:
+                    swapped = True
+                    owner.path.rename(owner.path.with_name(owner.path.name + "-original"))
+                    owner.path.symlink_to(outside, target_is_directory=True)
+            with patch.object(owner, "check", side_effect=check):
+                return original(archive, plan, owner, record)
+        with patch.object(self.a, "_extract", side_effect=swap_after_check):
+            with self.assertRaises(self.a.AcquireError):
+                self.acquire(record)
+        self.assertEqual((self.a.tree_manifest(outside), outside.stat().st_mtime_ns), before)
+
+    def test_unsupported_clone_filesystem_fails_closed(self):
+        archive, record = self.archive()
+        def unsupported(*args):
+            self.a.ctypes.set_errno(errno.ENOTSUP)
+            return -1
+        class UnsupportedLibrary:
+            fclonefileat = staticmethod(unsupported)
+        with patch.object(self.a, "open_https", return_value=io.BytesIO(archive.read_bytes())), \
+             patch.object(self.a.ctypes, "CDLL", return_value=UnsupportedLibrary()):
+            with self.assertRaises(self.a.AcquireError):
+                self.acquire(record, False)
+        self.assertFalse((self.project / "Dependencies/.downloads" / self.a.cache_name(record)).exists())
+        self.assertFalse((self.project / "Dependencies/fixture").exists())
+
+    def test_source_publication_uses_verified_directory_fd(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._publish_fd
+        def swap_temporary(src, dst, name):
+            staging = next((self.project / "Dependencies").glob(".staging-*"))
+            staging.rename(staging.with_name(staging.name + "-verified"))
+            staging.mkdir()
+            (staging / "LICENSE").write_bytes(b"unverified replacement")
+            return original(src, dst, name)
+        with patch.object(self.a, "_publish_fd", side_effect=swap_temporary):
+            with self.assertRaises(self.a.AcquireError):
+                self.acquire(record)
+        published = self.project / "Dependencies/fixture"
+        self.assertEqual((published / "LICENSE").read_bytes(), b"license\n")
+        self.assertEqual((published / "code.c").read_bytes(), b"source\n")
+
+    def test_publication_uses_verified_inode_after_temporary_entry_substitution(self):
+        archive, record = self.archive()
+        original = self.a._publish_fd
+        substituted = False
+        def swap_temporary(src, dst, *args, **kwargs):
+            nonlocal substituted
+            if not substituted:
+                substituted = True
+                partial = next((self.project / "Dependencies/.downloads").glob(".partial-*"))
+                partial.rename(partial.with_name(partial.name + "-verified"))
+                partial.write_bytes(b"unverified replacement")
+            return original(src, dst, *args, **kwargs)
+        with patch.object(self.a, "open_https", return_value=io.BytesIO(archive.read_bytes())), \
+             patch.object(self.a, "_publish_fd", side_effect=swap_temporary):
+            try:
+                self.acquire(record, False)
+            except self.a.AcquireError:
+                pass
+        self.assertTrue(substituted)
+        cached = self.project / "Dependencies/.downloads" / self.a.cache_name(record)
+        if cached.exists():
+            self.assertEqual(cached.read_bytes(), archive.read_bytes(), "unverified bytes became public")
 
     def test_symlink_layout_rejected(self):
         _, record = self.archive()
@@ -254,7 +371,7 @@ class AcquisitionTests(unittest.TestCase):
                 outside.mkdir()
                 marker = outside / "marker"
                 marker.write_bytes(b"keep")
-                real_replace = os.replace
+                real_replace = self.a._publish_fd
                 raced = False
                 def race(src, dst, *args, **kwargs):
                     nonlocal raced
@@ -271,7 +388,7 @@ class AcquisitionTests(unittest.TestCase):
                 (self.project / "config/dependencies.lock").write_bytes(canonical_bytes(DependencyLock(1, (record,))))
                 stderr = io.StringIO()
                 with patch.object(self.a, "open_https", return_value=io.BytesIO(archive.read_bytes())), \
-                     patch.object(os, "replace", side_effect=race), contextlib.redirect_stderr(stderr):
+                     patch.object(self.a, "_publish_fd", side_effect=race), contextlib.redirect_stderr(stderr):
                     self.assertEqual(self.a.main(["--project-root", str(self.project)]), 1)
                 self.assertIn("path identity changed before publication", stderr.getvalue())
                 self.assertEqual(marker.read_bytes(), b"keep")
@@ -343,6 +460,59 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertRaises(self.a.AcquireError):
                 self.acquire(invalid)
         self.assertTrue((source / "LICENSE").is_file())
+
+    def test_git_reuse_never_executes_local_commands(self):
+        record, fetch = self.git_record()
+        with patch.object(self.a, "_fetch_git", side_effect=fetch):
+            self.acquire(record, False)
+        source = self.project / "Dependencies/snappy"
+        marker = self.base / "executed"
+        helper = self.base / "hostile-command"
+        helper.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+        helper.chmod(0o755)
+        self.git(source, "config", "core.fsmonitor", str(helper))
+        try:
+            self.acquire(record)
+        except self.a.AcquireError:
+            pass
+        self.assertFalse(marker.exists(), "verification executed local core.fsmonitor")
+        self.git(source, "config", "--unset", "core.fsmonitor")
+        self.git(source, "config", "filter.hostile.clean", str(helper))
+        (source / ".git/info/attributes").write_text("LICENSE filter=hostile\n")
+        try:
+            self.acquire(record)
+        except self.a.AcquireError:
+            pass
+        self.assertFalse(marker.exists(), "verification executed local clean filter")
+
+    def test_git_corrupt_bundle_refused_with_valid_source(self):
+        record, fetch = self.git_record()
+        with patch.object(self.a, "_fetch_git", side_effect=fetch):
+            self.acquire(record, False)
+        cached = self.project / "Dependencies/.downloads" / self.a.cache_name(record)
+        good = cached.read_bytes()
+        for data in (b"not a bundle", good[:-30]):
+            with self.subTest(size=len(data)):
+                cached.write_bytes(data)
+                with self.assertRaises(self.a.AcquireError):
+                    self.acquire(record)
+                self.assertEqual(cached.read_bytes(), data)
+                self.assertEqual((self.project / "Dependencies/snappy/LICENSE").read_bytes(), b"license\n")
+
+    def test_git_wrong_bundle_refused_with_valid_source(self):
+        record, fetch = self.git_record()
+        with patch.object(self.a, "_fetch_git", side_effect=fetch):
+            self.acquire(record, False)
+        cached = self.project / "Dependencies/.downloads" / self.a.cache_name(record)
+        remote = self.base / "remote"
+        self.git(remote, "checkout", "--orphan", "unrelated")
+        (remote / "LICENSE").write_bytes(b"other license\n")
+        self.git(remote, "add", ".")
+        self.git(remote, "commit", "-qm", "unrelated")
+        cached.unlink()
+        self.git(remote, "bundle", "create", str(cached), "HEAD")
+        with self.assertRaises(self.a.AcquireError):
+            self.acquire(record)
 
     def test_git_attached_branch_is_identity_drift(self):
         record, fetch = self.git_record()
