@@ -63,6 +63,27 @@ class PrefixSnapshot:
     digest: str
 
 
+@dataclass(frozen=True)
+class EvidenceGuard:
+    label: str
+    parent: OwnedDirectory
+    owner: OwnedDirectory
+    name: str
+    identity: tuple[int, int, int]
+    manifest: bytes
+    backup_fd: int
+
+
+@dataclass(frozen=True)
+class EvidenceChildGuard:
+    label: str
+    parent: OwnedDirectory
+    name: str
+    identity: tuple[int, int, int] | None
+    manifest: bytes | None
+    backup_fd: int | None
+
+
 def _run_text(argv: tuple[str, ...]) -> str:
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
     result = subprocess.run(argv, capture_output=True, text=True, env=env)
@@ -240,14 +261,14 @@ def _canonical_json(value) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def _write(path: Path, data: bytes | str, owner: OwnedDirectory | None = None):
+def _write_descriptor(owner: OwnedDirectory, name: str, data: bytes | str,
+                      *, check_path: bool):
     raw = data.encode() if isinstance(data, str) else data
-    if owner is None:
-        with OwnedDirectory(path.parent) as opened:
-            _write(path, raw, opened)
-        return
-    owner.check()
-    temporary = "." + path.name + "." + secrets.token_hex(16) + ".tmp"
+    if check_path:
+        owner.check()
+    else:
+        _check_open_directory(owner)
+    temporary = "." + name + "." + secrets.token_hex(16) + ".tmp"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                  0o600, dir_fd=owner.fd)
     try:
@@ -255,14 +276,33 @@ def _write(path: Path, data: bytes | str, owner: OwnedDirectory | None = None):
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
-        owner.check()
-        os.replace(temporary, path.name, src_dir_fd=owner.fd, dst_dir_fd=owner.fd)
-        owner.check()
+        if check_path:
+            owner.check()
+        else:
+            _check_open_directory(owner)
+        os.replace(temporary, name, src_dir_fd=owner.fd, dst_dir_fd=owner.fd)
+        if check_path:
+            owner.check()
+        else:
+            _check_open_directory(owner)
     finally:
         try:
             os.unlink(temporary, dir_fd=owner.fd)
         except FileNotFoundError:
             pass
+
+
+def _write(path: Path, data: bytes | str, owner: OwnedDirectory | None = None):
+    if owner is None:
+        with OwnedDirectory(path.parent) as opened:
+            _write(path, data, opened)
+        return
+    _write_descriptor(owner, path.name, data, check_path=True)
+
+
+def _write_owned(owner: OwnedDirectory, name: str, data: bytes | str):
+    """Write through the pinned directory even after its public path moved."""
+    _write_descriptor(owner, name, data, check_path=False)
 
 
 def _input_document(lock: DependencyLock, record: DependencyRecord, adapter: Path,
@@ -464,6 +504,68 @@ def _copy_directory_fd_to_path(source_fd: int, destination: Path):
             target.symlink_to(os.readlink(name, dir_fd=source_fd))
         else:
             raise BuildError(f"unsafe protected prefix entry: {name}")
+
+
+def _copy_directory_fd(source_fd: int, destination_fd: int):
+    """Copy a directory tree without reacquiring either directory by pathname."""
+    for name in sorted(os.listdir(source_fd), key=os.fsencode):
+        info = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            os.mkdir(name, stat.S_IMODE(info.st_mode), dir_fd=destination_fd)
+            source_child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                   dir_fd=source_fd)
+            destination_child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                        dir_fd=destination_fd)
+            try:
+                _copy_directory_fd(source_child, destination_child)
+                os.fsync(destination_child)
+            finally:
+                os.close(destination_child)
+                os.close(source_child)
+        elif stat.S_ISREG(info.st_mode):
+            source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
+            target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             stat.S_IMODE(info.st_mode), dir_fd=destination_fd)
+            try:
+                with os.fdopen(os.dup(source), "rb") as input_stream, \
+                     os.fdopen(os.dup(target), "wb") as output_stream:
+                    shutil.copyfileobj(input_stream, output_stream)
+                    output_stream.flush()
+                    os.fsync(output_stream.fileno())
+                os.fchmod(target, stat.S_IMODE(info.st_mode))
+            finally:
+                os.close(target)
+                os.close(source)
+        elif stat.S_ISLNK(info.st_mode):
+            os.symlink(os.readlink(name, dir_fd=source_fd), name, dir_fd=destination_fd)
+        else:
+            raise BuildError(f"unsafe evidence entry: {name}")
+
+
+def _clear_directory_fd(directory_fd: int):
+    for name in os.listdir(directory_fd):
+        _remove_at(directory_fd, name)
+
+
+def _restore_directory_contents(directory_fd: int, backup_fd: int, manifest: bytes):
+    _clear_directory_fd(directory_fd)
+    _copy_directory_fd(backup_fd, directory_fd)
+    os.fsync(directory_fd)
+    if _directory_manifest_fd(directory_fd) != manifest:
+        raise BuildError("failed to restore protected evidence")
+
+
+def _make_backup_fd(backup_root_fd: int, name: str, source_fd: int) -> int:
+    os.mkdir(name, 0o700, dir_fd=backup_root_fd)
+    backup_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=backup_root_fd)
+    try:
+        _copy_directory_fd(source_fd, backup_fd)
+        os.fsync(backup_fd)
+    except Exception:
+        os.close(backup_fd)
+        raise
+    return backup_fd
 
 
 def _copy_path_to_directory_fd(source: Path, destination_fd: int, name: str):
@@ -716,18 +818,119 @@ def _restore_snapshots_owned(backup: Path, stage_name: str,
     _check_open_directory(owned)
 
 
-def _check_attempt_history(evidence_owner: OwnedDirectory, attempts: Path,
-                           expected_identity, expected_digest, backup: Path):
-    evidence_owner.check()
-    actual = _identity(attempts)
-    if actual == expected_identity and (actual is None or tree_digest(attempts) == expected_digest):
-        return
-    if actual is not None:
-        _remove_at(evidence_owner.fd, "attempts")
-    if expected_identity is not None:
-        shutil.copytree(backup / "attempts", attempts, symlinks=True)
-    evidence_owner.check()
-    raise BuildError("evidence attempt history changed and was restored")
+def _snapshot_evidence(label: str, parent: OwnedDirectory, owner: OwnedDirectory,
+                       name: str, backup_root_fd: int, backup_name: str) -> EvidenceGuard:
+    _check_open_directory(parent)
+    _check_open_directory(owner)
+    identity = _identity_at(parent.fd, name)
+    opened = os.fstat(owner.fd)
+    owner_identity = opened.st_dev, opened.st_ino, stat.S_IFMT(opened.st_mode)
+    if identity != owner_identity:
+        raise BuildError(f"protected evidence binding changed before adapter: {label}")
+    manifest = _directory_manifest_fd(owner.fd)
+    backup_fd = _make_backup_fd(backup_root_fd, backup_name, owner.fd)
+    return EvidenceGuard(label, parent, owner, name, owner_identity, manifest, backup_fd)
+
+
+def _snapshot_evidence_child(label: str, parent: OwnedDirectory, name: str,
+                             backup_root_fd: int, backup_name: str) -> EvidenceChildGuard:
+    _check_open_directory(parent)
+    identity = _identity_at(parent.fd, name)
+    if identity is None:
+        return EvidenceChildGuard(label, parent, name, None, None, None)
+    if identity[2] != stat.S_IFDIR:
+        raise BuildError(f"unsafe protected evidence directory: {label}")
+    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+    try:
+        manifest = _directory_manifest_fd(child)
+        backup_fd = _make_backup_fd(backup_root_fd, backup_name, child)
+    finally:
+        os.close(child)
+    return EvidenceChildGuard(label, parent, name, identity, manifest, backup_fd)
+
+
+def _repair_evidence_guard(guard: EvidenceGuard) -> bool:
+    """Restore evidence content and binding using only descriptors opened pre-adapter."""
+    _check_open_directory(guard.parent)
+    _check_open_directory(guard.owner)
+    changed = False
+    current = _identity_at(guard.parent.fd, guard.name)
+    if current != guard.identity:
+        changed = True
+        original_name = _identity_name(guard.parent.fd, guard.identity)
+        if original_name is None:
+            _restore_directory_contents(guard.owner.fd, guard.backup_fd, guard.manifest)
+            raise BuildError(f"protected evidence binding could not be restored: {guard.label}")
+        if current is not None:
+            _remove_at(guard.parent.fd, guard.name)
+        _rename_atx(guard.parent.fd, original_name, guard.name, 0x00000004)
+    if _directory_manifest_fd(guard.owner.fd) != guard.manifest:
+        changed = True
+        _restore_directory_contents(guard.owner.fd, guard.backup_fd, guard.manifest)
+    if (_identity_at(guard.parent.fd, guard.name) != guard.identity
+            or _directory_manifest_fd(guard.owner.fd) != guard.manifest):
+        raise BuildError(f"protected evidence could not be restored: {guard.label}")
+    return changed
+
+
+def _repair_evidence_child(guard: EvidenceChildGuard) -> bool:
+    """Restore a protected evidence child relative to its pinned parent."""
+    _check_open_directory(guard.parent)
+    current = _identity_at(guard.parent.fd, guard.name)
+    if guard.identity is None:
+        if current is None:
+            return False
+        _remove_at(guard.parent.fd, guard.name)
+        if _identity_at(guard.parent.fd, guard.name) is not None:
+            raise BuildError(f"protected evidence could not be restored: {guard.label}")
+        return True
+
+    changed = False
+    identity_lost = False
+    if current != guard.identity:
+        changed = True
+        original_name = _identity_name(guard.parent.fd, guard.identity)
+        if current is not None:
+            _remove_at(guard.parent.fd, guard.name)
+        if original_name is not None:
+            _rename_atx(guard.parent.fd, original_name, guard.name, 0x00000004)
+        else:
+            os.mkdir(guard.name, 0o700, dir_fd=guard.parent.fd)
+            identity_lost = True
+    child = os.open(guard.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=guard.parent.fd)
+    try:
+        if _directory_manifest_fd(child) != guard.manifest:
+            changed = True
+            _restore_directory_contents(child, guard.backup_fd, guard.manifest)
+        if _directory_manifest_fd(child) != guard.manifest:
+            raise BuildError(f"protected evidence could not be restored: {guard.label}")
+    finally:
+        os.close(child)
+    if identity_lost:
+        raise BuildError(f"protected evidence identity could not be restored: {guard.label}")
+    return changed
+
+
+def _repair_evidence(guards: tuple[EvidenceGuard, ...],
+                     child_guards: tuple[EvidenceChildGuard, ...]) -> tuple[str, ...]:
+    changed = []
+    failures = []
+    for guard in guards:
+        try:
+            if _repair_evidence_guard(guard):
+                changed.append(guard.label)
+        except (BuildError, OSError) as error:
+            failures.append(f"{guard.label}: {error}")
+    for guard in child_guards:
+        try:
+            if _repair_evidence_child(guard):
+                changed.append(guard.label)
+        except (BuildError, OSError) as error:
+            failures.append(f"{guard.label}: {error}")
+    if failures:
+        raise BuildError("failed to preserve protected evidence: " + "; ".join(failures))
+    return tuple(changed)
 
 
 def _prepare_component(component: Path, evidence: Path):
@@ -811,7 +1014,7 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
         argv = adapter_argv(record, paths, dependency_prefixes, jobs)
         ownership = ExitStack()
         backup = None
-        history_backup = None
+        evidence_backup = None
         try:
             build_owner = ownership.enter_context(OwnedDirectory(project_root / "Build"))
             prefix_owner = ownership.enter_context(OwnedDirectory(prefix_root))
@@ -824,19 +1027,41 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                     _copy_directory_fd_to_path(child, backup / name)
                 finally:
                     os.close(child)
-            evidence_owner = OwnedDirectory(evidence)
-            attempts = evidence / "attempts"
-            attempts_identity = _identity(attempts)
-            attempts_digest = tree_digest(attempts) if attempts_identity is not None else None
-            history_backup = Path(tempfile.mkdtemp(prefix="airdc-attempt-history-"))
-            if attempts_identity is not None:
-                shutil.copytree(attempts, history_backup / "attempts", symlinks=True)
+            evidence_backup = Path(tempfile.mkdtemp(prefix="airdc-evidence-backups-"))
+            evidence_backup_fd = os.open(evidence_backup, os.O_RDONLY | os.O_DIRECTORY
+                                         | os.O_NOFOLLOW)
+            ownership.callback(os.close, evidence_backup_fd)
+            evidence_owner = ownership.enter_context(OwnedDirectory(evidence))
+            attempts_guard = _snapshot_evidence_child(
+                f"{record.name} attempt history", evidence_owner, "attempts",
+                evidence_backup_fd, "current-attempts",
+            )
+            if attempts_guard.backup_fd is not None:
+                ownership.callback(os.close, attempts_guard.backup_fd)
+            evidence_guards = []
+            for accepted_name in accepted:
+                accepted_component = dependencies_root / accepted_name
+                accepted_component_owner = ownership.enter_context(
+                    OwnedDirectory(accepted_component)
+                )
+                accepted_evidence_owner = ownership.enter_context(
+                    OwnedDirectory(accepted_component / "evidence")
+                )
+                guard = _snapshot_evidence(
+                    f"{accepted_name} accepted evidence", accepted_component_owner,
+                    accepted_evidence_owner, "evidence", evidence_backup_fd,
+                    f"accepted-{accepted_name}",
+                )
+                ownership.callback(os.close, guard.backup_fd)
+                evidence_guards.append(guard)
+            evidence_guards = tuple(evidence_guards)
+            evidence_child_guards = (attempts_guard,)
         except Exception:
             ownership.close()
             if backup is not None:
                 shutil.rmtree(backup)
-            if history_backup is not None:
-                shutil.rmtree(history_backup)
+            if evidence_backup is not None:
+                shutil.rmtree(evidence_backup)
             raise
         status = 0
         try:
@@ -851,10 +1076,11 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                     run_adapter(record, paths, dependency_prefixes, env, jobs=jobs, log=log)
                 except subprocess.CalledProcessError as error:
                     status = error.returncode
-            evidence_owner.check()
-            _check_attempt_history(evidence_owner, attempts, attempts_identity,
-                                   attempts_digest, history_backup)
-            _write(evidence / "exit-status.txt", f"{status}\n", evidence_owner)
+            changed_evidence = _repair_evidence(evidence_guards, evidence_child_guards)
+            if changed_evidence:
+                raise BuildError("protected evidence changed and was restored: "
+                                 + ", ".join(changed_evidence))
+            _write_owned(evidence_owner, "exit-status.txt", f"{status}\n")
             try:
                 build_owner.check()
                 prefix_owner.check()
@@ -895,10 +1121,12 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
             stage = Path()
         except (AcquireError, BuildError, PrefixError, OSError) as error:
             try:
-                _check_attempt_history(evidence_owner, attempts, attempts_identity,
-                                       attempts_digest, history_backup)
-            except (AcquireError, BuildError, OSError):
-                pass
+                changed_evidence = _repair_evidence(evidence_guards, evidence_child_guards)
+                if changed_evidence:
+                    error = BuildError("protected evidence changed and was restored: "
+                                       + ", ".join(changed_evidence))
+            except (AcquireError, BuildError, OSError) as recovery_error:
+                error = recovery_error
             try:
                 build_owner.check()
                 prefix_owner.check()
@@ -907,27 +1135,26 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                 _restore_snapshots(build_owner, prefix_owner, backup, stage.name,
                                    stage_identity, protected)
             try:
-                evidence_owner.check()
+                _check_open_directory(evidence_owner)
                 try:
                     os.unlink("input-fingerprint.txt", dir_fd=evidence_owner.fd)
                 except FileNotFoundError:
                     pass
-                if not (evidence / "exit-status.txt").exists():
-                    _write(evidence / "exit-status.txt", "1\n", evidence_owner)
-                _write(evidence / "error.txt", f"{type(error).__name__}: {error}\n",
-                       evidence_owner)
-            except (AcquireError, OSError):
-                pass
+                if _identity_at(evidence_owner.fd, "exit-status.txt") is None:
+                    _write_owned(evidence_owner, "exit-status.txt", f"{status or 1}\n")
+                _write_owned(evidence_owner, "error.txt",
+                             f"{type(error).__name__}: {error}\n")
+            except (AcquireError, BuildError, OSError) as evidence_error:
+                error = BuildError(f"failure evidence could not be preserved: {evidence_error}")
             raise BuildError(f"{record.name}: dependency prefix validation failed: {error}") from error
         finally:
-            evidence_owner.__exit__(None, None, None)
             try:
                 if stage and stage != Path() and stage.parent == prefix_root:
                     _cleanup_stage_owned(prefix_owner, stage_identity)
             finally:
                 ownership.close()
                 shutil.rmtree(backup)
-                shutil.rmtree(history_backup)
+                shutil.rmtree(evidence_backup)
         accepted[record.name] = target
         reports[record.name] = final_report
 

@@ -770,6 +770,88 @@ stage=$3
         self.assertFalse(any(path.name.startswith((".staging-", ".prior-", ".cleanup-"))
                              for path in moved_prefix.iterdir()))
 
+    def _assert_build_ancestor_evidence_tamper_is_restored(self, adapter_status):
+        self.invoke()
+        build_root = self.project / "Build"
+        prefix_root = build_root / "prefix"
+        accepted_a = prefix_root / "a"
+        evidence_a = build_root / "dependencies/a/evidence"
+        evidence_b = build_root / "dependencies/b/evidence"
+        build_identity = build._identity(build_root)
+        prefix_identity = build._identity(prefix_root)
+        accepted_a_identity = build._identity(accepted_a)
+        prefix_before = filesystem_state(prefix_root)
+        prefix_digest_before = prefix.tree_digest(prefix_root)
+        accepted_a_before = filesystem_state(accepted_a)
+        evidence_a_before = filesystem_state(evidence_a)
+        evidence_a_digest_before = prefix.tree_digest(evidence_a)
+        prior_b_files = {
+            path.name: path.read_bytes()
+            for path in evidence_b.iterdir()
+            if path.is_file() and not path.is_symlink()
+        }
+        replacement = self.project / f"replacement-build-{adapter_status}"
+        (replacement / "prefix/victim").mkdir(parents=True)
+        (replacement / "prefix/victim/marker").write_bytes(b"foreign build replacement")
+        (replacement / "sentinel").write_bytes(b"keep replacement intact")
+        replacement_identity = build._identity(replacement)
+        replacement_before = filesystem_state(replacement)
+        exit_line = f"exit {adapter_status}\n" if adapter_status else ""
+        self.write_adapter(
+            "b",
+            'build_root="$(/usr/bin/dirname "$(/usr/bin/dirname "$(/usr/bin/dirname "$build")")")"\n'
+            '/bin/mv "$build_root" "${build_root}-original"\n'
+            f'/bin/mv "{replacement}" "$build_root"\n'
+            '/usr/bin/printf "tampered-history\\n" > '
+            '"${build_root}-original/dependencies/b/evidence/attempts/0001/input-fingerprint.txt"\n'
+            '/usr/bin/printf "tampered-accepted\\n" > '
+            '"${build_root}-original/dependencies/a/evidence/input-fingerprint.txt"\n'
+            + exit_line,
+        )
+
+        with self.assertRaises(build.BuildError):
+            self.invoke()
+
+        moved_build = self.project / "Build-original"
+        moved_prefix = moved_build / "prefix"
+        moved_evidence_a = moved_build / "dependencies/a/evidence"
+        attempt = moved_build / "dependencies/b/evidence/attempts/0001"
+        self.assertEqual(build._identity(build_root), replacement_identity)
+        self.assertEqual(filesystem_state(build_root), replacement_before)
+        self.assertEqual((build_root / "sentinel").read_bytes(), b"keep replacement intact")
+        self.assertEqual(build._identity(moved_build), build_identity)
+        self.assertEqual(build._identity(moved_prefix), prefix_identity)
+        self.assertEqual(build._identity(moved_prefix / "a"), accepted_a_identity)
+        self.assertEqual(filesystem_state(moved_prefix), prefix_before)
+        self.assertEqual(prefix.tree_digest(moved_prefix), prefix_digest_before)
+        self.assertEqual(filesystem_state(moved_prefix / "a"), accepted_a_before)
+        self.assertEqual(filesystem_state(moved_evidence_a), evidence_a_before)
+        self.assertEqual(prefix.tree_digest(moved_evidence_a), evidence_a_digest_before)
+        self.assertEqual(
+            sorted(path.name for path in attempt.iterdir()),
+            sorted((*prior_b_files, "sha256.txt")),
+        )
+        for name, content in prior_b_files.items():
+            self.assertEqual((attempt / name).read_bytes(), content)
+        expected_hashes = "".join(
+            f"{hashlib.sha256(content).hexdigest()}  {name}\n"
+            for name, content in sorted(prior_b_files.items())
+        ).encode()
+        self.assertEqual((attempt / "sha256.txt").read_bytes(), expected_hashes)
+        self.assertEqual((moved_build / "dependencies/b/evidence/exit-status.txt").read_text(),
+                         f"{adapter_status or 1}\n")
+        self.assertTrue((moved_build / "dependencies/b/evidence/error.txt").is_file())
+        self.assertFalse(any(path.name.startswith((".staging-", ".prior-", ".cleanup-"))
+                             for path in moved_prefix.iterdir()))
+        self.assertEqual(tuple(build_root.glob(".prefix-quarantine-*")), ())
+        self.assertEqual(tuple(moved_build.glob(".prefix-quarantine-*")), ())
+
+    def test_failed_adapter_build_ancestor_substitution_restores_tampered_evidence(self):
+        self._assert_build_ancestor_evidence_tamper_is_restored(7)
+
+    def test_successful_adapter_build_ancestor_substitution_restores_tampered_evidence(self):
+        self._assert_build_ancestor_evidence_tamper_is_restored(0)
+
     def test_failed_adapter_prefix_root_substitution_preserves_both_roots(self):
         self.invoke()
         build_root = self.project / "Build"
