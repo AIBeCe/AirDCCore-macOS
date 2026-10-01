@@ -849,6 +849,46 @@ def _snapshot_evidence_child(label: str, parent: OwnedDirectory, name: str,
     return EvidenceChildGuard(label, parent, name, identity, manifest, backup_fd)
 
 
+def _publish_restored_evidence(guard: EvidenceGuard):
+    """Restore a deleted evidence directory below its pinned component parent."""
+    _check_open_directory(guard.parent)
+    recovery_name = ".evidence-recovery-" + secrets.token_hex(16)
+    recovery_identity = None
+    published = False
+    try:
+        os.mkdir(recovery_name, 0o700, dir_fd=guard.parent.fd)
+        recovery_identity = _identity_at(guard.parent.fd, recovery_name)
+        recovery = os.open(recovery_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                           dir_fd=guard.parent.fd)
+        try:
+            _copy_directory_fd(guard.backup_fd, recovery)
+            os.fsync(recovery)
+            if _directory_manifest_fd(recovery) != guard.manifest:
+                raise BuildError(f"protected evidence backup could not be restored: {guard.label}")
+        finally:
+            os.close(recovery)
+
+        _check_open_directory(guard.parent)
+        if _identity_at(guard.parent.fd, guard.name) is not None:
+            raise BuildError(f"protected evidence binding changed during restoration: {guard.label}")
+        _rename_atx(guard.parent.fd, recovery_name, guard.name, 0x00000004)
+        published = True
+        os.fsync(guard.parent.fd)
+        if _identity_at(guard.parent.fd, guard.name) != recovery_identity:
+            raise BuildError(f"protected evidence binding changed during restoration: {guard.label}")
+        restored = os.open(guard.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                           dir_fd=guard.parent.fd)
+        try:
+            if _directory_manifest_fd(restored) != guard.manifest:
+                raise BuildError(f"protected evidence could not be restored: {guard.label}")
+        finally:
+            os.close(restored)
+    finally:
+        if not published and recovery_identity is not None:
+            if _identity_at(guard.parent.fd, recovery_name) == recovery_identity:
+                _remove_at(guard.parent.fd, recovery_name)
+
+
 def _repair_evidence_guard(guard: EvidenceGuard) -> bool:
     """Restore evidence content and binding using only descriptors opened pre-adapter."""
     _check_open_directory(guard.parent)
@@ -859,7 +899,17 @@ def _repair_evidence_guard(guard: EvidenceGuard) -> bool:
         changed = True
         original_name = _identity_name(guard.parent.fd, guard.identity)
         if original_name is None:
-            _restore_directory_contents(guard.owner.fd, guard.backup_fd, guard.manifest)
+            if current is None:
+                _publish_restored_evidence(guard)
+                return True
+            if current[2] == stat.S_IFDIR:
+                replacement = os.open(guard.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                      dir_fd=guard.parent.fd)
+                try:
+                    if _directory_manifest_fd(replacement) == guard.manifest:
+                        return True
+                finally:
+                    os.close(replacement)
             raise BuildError(f"protected evidence binding could not be restored: {guard.label}")
         if current is not None:
             _remove_at(guard.parent.fd, guard.name)
