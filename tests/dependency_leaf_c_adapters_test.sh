@@ -50,7 +50,7 @@ elif name == "cmake":
                                ("lib/cmake/zlib/ZLIBConfigVersion.cmake", "# fixture\n"),
                                ("lib/cmake/zlib/ZLIB-static.cmake", "# fixture\n"),
                                ("lib/cmake/zlib/ZLIB-static-release.cmake", "# fixture\n"),
-                               ("lib/pkgconfig/zlib.pc", "prefix=/tmp/stage\nexec_prefix=/tmp/stage\nName: zlib\nVersion: 1.3.2\nLibs: -L${exec_prefix}/lib -lz\nCflags: -I${prefix}/include\n")):
+                               ("lib/pkgconfig/zlib.pc", "prefix=/tmp/stage\nexec_prefix=/tmp/stage\nlibdir=${exec_prefix}/lib\nsharedlibdir=${exec_prefix}/lib\nincludedir=${prefix}/include\nName: zlib\nDescription: zlib compression library\nVersion: 1.3.2\nLicense: Zlib\nLibs: -L${libdir} -lz\nCflags: -I${includedir}\n")):
             target = stage / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(data)
@@ -121,12 +121,18 @@ class AdapterTests(unittest.TestCase):
     def commands(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
+    def evidence(self, result):
+        return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+
     def staged(self):
         return sorted(str(path.relative_to(self.stage)) for path in self.stage.rglob("*") if path.is_file())
 
     def test_bzip2_exact_make_check_stage_and_installed_consumer(self):
         result = self.invoke(BZIP2)
         self.assertEqual(result.returncode, 0, result.stderr)
+        evidence = self.evidence(result)
+        self.assertEqual([item["type"] for item in evidence], ["command", "status"] * 4)
+        self.assertTrue(all(item.get("status", 0) == 0 for item in evidence if item["type"] == "status"))
         options = ["CC=/usr/bin/clang", "AR=/usr/bin/ar", "RANLIB=/usr/bin/ranlib",
                    "CFLAGS=-O3 -DNDEBUG -D_FILE_OFFSET_BITS=64 -arch arm64 -mmacosx-version-min=14.0"]
         commands = self.commands()
@@ -148,6 +154,9 @@ class AdapterTests(unittest.TestCase):
     def test_zlib_exact_out_of_tree_cmake_ctest_stage_and_installed_consumer(self):
         result = self.invoke(ZLIB, epoch="1771332426")
         self.assertEqual(result.returncode, 0, result.stderr)
+        evidence = self.evidence(result)
+        self.assertEqual([item["type"] for item in evidence], ["command", "status"] * 6)
+        self.assertTrue(all(item.get("status", 0) == 0 for item in evidence if item["type"] == "status"))
         commands = self.commands()
         self.assertEqual(commands[0], ["cmake", "-S", str(self.source), "-B", str(self.build),
                                        "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
@@ -167,7 +176,19 @@ class AdapterTests(unittest.TestCase):
                                          "lib/cmake/zlib/ZLIB-static-release.cmake", "lib/cmake/zlib/ZLIB-static.cmake",
                                          "lib/cmake/zlib/ZLIBConfig.cmake", "lib/cmake/zlib/ZLIBConfigVersion.cmake",
                                          "lib/libz.a", "lib/pkgconfig/zlib.pc"])
-        self.assertNotIn(str(self.stage), (self.stage / "lib/pkgconfig/zlib.pc").read_text())
+        metadata = (self.stage / "lib/pkgconfig/zlib.pc").read_text()
+        self.assertIn("prefix=${pcfiledir}/../..", metadata)
+        self.assertIn("exec_prefix=${prefix}", metadata)
+        relocated = self.root / "relocated-stage"
+        self.stage.rename(relocated)
+        lookup = subprocess.run(["pkg-config", "--define-prefix", "--cflags", "--libs",
+                                str(relocated / "lib/pkgconfig/zlib.pc")],
+                                env=self.env,
+                                text=True, capture_output=True)
+        self.assertEqual(lookup.returncode, 0, lookup.stderr)
+        self.assertIn(f"-I{relocated / 'lib/pkgconfig'}/../../include", lookup.stdout)
+        self.assertIn(f"-L{relocated / 'lib/pkgconfig'}/../../lib", lookup.stdout)
+        self.assertEqual(self.source_manifest, sorted((p.relative_to(self.source).as_posix(), p.read_bytes()) for p in self.source.rglob("*")))
         self.assertEqual(self.run_log.read_text(), "consumer-run\n")
         body = (self.build / "zlib-consumer.c").read_text()
         for token in ('#include <zlib.h>', '"AirDCCore"', "compress2", "uncompress"):
@@ -189,6 +210,9 @@ class AdapterTests(unittest.TestCase):
                         elif path.is_dir(): path.rmdir()
                     result = self.invoke(adapter, epoch=epoch, failure=failure)
                     self.assertEqual(result.returncode, 29, result.stderr)
+                    statuses = [item for item in self.evidence(result) if item["type"] == "status"]
+                    self.assertTrue(statuses)
+                    self.assertEqual(statuses[-1]["status"], 29)
                     self.assertFalse(self.run_log.exists())
                     if adapter == BZIP2 and failure.startswith("make:"):
                         self.assertEqual(self.staged(), [])
@@ -212,14 +236,22 @@ class AdapterTests(unittest.TestCase):
             for extra in (("unexpected-prefix",),):
                 result = self.invoke(adapter, extra=extra)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertIn("expected SOURCE BUILD STAGE JOBS EPOCH", result.stderr)
                 self.assertFalse(self.log.exists())
             result = subprocess.run([str(adapter), str(self.source), str(self.source),
-                                     str(self.stage), "3", "1"], env=self.env, capture_output=True)
-            self.assertNotEqual(result.returncode, 0)
+                                     str(self.stage), "3", "1"], env={**self.env, "SOURCE_DATE_EPOCH": "1"}, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("directories must be distinct", result.stderr)
             self.assertFalse(self.log.exists())
             result = subprocess.run([str(adapter), str(self.source), str(self.build),
-                                     str(self.stage), "0", "1"], env=self.env, capture_output=True)
-            self.assertNotEqual(result.returncode, 0)
+                                     str(self.stage), "-1", "1"], env={**self.env, "SOURCE_DATE_EPOCH": "1"}, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("JOBS must be a positive integer", result.stderr)
+            self.assertFalse(self.log.exists())
+            result = subprocess.run([str(adapter), str(self.source), str(self.build),
+                                     str(self.stage), "3", "1"], env={**self.env, "SOURCE_DATE_EPOCH": "1563040227"}, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("epoch disagrees", result.stderr)
             self.assertFalse(self.log.exists())
 
 if __name__ == "__main__":

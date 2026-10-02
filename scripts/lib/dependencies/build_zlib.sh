@@ -2,7 +2,8 @@
 set -eu
 
 die() { printf '%s\n' "zlib adapter: $*" >&2; exit 2; }
-run() { purpose=$1; shift; printf 'adapter-command\t%s' "$purpose"; for arg in "$@"; do printf '\t%s' "$arg"; done; printf '\n'; set +e; "$@"; status=$?; set -e; printf 'adapter-status\t%s\t%s\n' "$purpose" "$status"; return "$status"; }
+runner=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/command_runner.py
+run() { purpose=$1; shift; set +e; python3 "$runner" "$purpose" "$@"; status=$?; set -e; return "$status"; }
 [ "$#" -eq 5 ] || die 'expected SOURCE BUILD STAGE JOBS EPOCH'
 source=$1
 build=$2
@@ -36,7 +37,11 @@ run install cmake --install "$build"
 rm -rf "$stage/share"
 pc="$stage/lib/pkgconfig/zlib.pc"
 [ -f "$pc" ] || die 'missing installed pkg-config metadata'
-sed -e 's|^prefix=.*|prefix=|' -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' "$pc" > "$pc.tmp"
+sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
+    -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' \
+    -e 's|^libdir=.*|libdir=${pcfiledir}/../../lib|' \
+    -e 's|^sharedlibdir=.*|sharedlibdir=${pcfiledir}/../../lib|' \
+    -e 's|^includedir=.*|includedir=${pcfiledir}/../../include|' "$pc" > "$pc.tmp"
 mv "$pc.tmp" "$pc"
 cp "$source/LICENSE" "$stage/LICENSE"
 for path in "$stage/include/zlib.h" "$stage/include/zconf.h" "$stage/lib/libz.a" \

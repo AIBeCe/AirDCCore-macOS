@@ -2,7 +2,8 @@
 set -eu
 
 die() { printf '%s\n' "bzip2 adapter: $*" >&2; exit 2; }
-run() { purpose=$1; shift; printf 'adapter-command\t%s' "$purpose"; for arg in "$@"; do printf '\t%s' "$arg"; done; printf '\n'; set +e; "$@"; status=$?; set -e; printf 'adapter-status\t%s\t%s\n' "$purpose" "$status"; return "$status"; }
+runner=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/command_runner.py
+run() { purpose=$1; shift; set +e; python3 "$runner" "$purpose" "$@"; status=$?; set -e; return "$status"; }
 [ "$#" -eq 5 ] || die 'expected SOURCE BUILD STAGE JOBS EPOCH'
 source=$1
 build=$2
