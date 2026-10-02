@@ -2,6 +2,7 @@
 set -eu
 
 die() { printf '%s\n' "bzip2 adapter: $*" >&2; exit 2; }
+run() { purpose=$1; shift; printf 'adapter-command\t%s' "$purpose"; for arg in "$@"; do printf '\t%s' "$arg"; done; printf '\n'; set +e; "$@"; status=$?; set -e; printf 'adapter-status\t%s\t%s\n' "$purpose" "$status"; return "$status"; }
 [ "$#" -eq 5 ] || die 'expected SOURCE BUILD STAGE JOBS EPOCH'
 source=$1
 build=$2
@@ -25,10 +26,10 @@ case "$epoch" in ''|*[!0-9]*) die 'EPOCH must be a nonnegative integer' ;; esac
 [ -f "$source/bzlib.h" ] && [ -f "$source/LICENSE" ] || die 'missing source input'
 cp -R "$source/." "$build/"
 
-make -C "$build" -j "$jobs" \
+run build make -C "$build" -j "$jobs" \
   'CC=/usr/bin/clang' 'AR=/usr/bin/ar' 'RANLIB=/usr/bin/ranlib' \
   'CFLAGS=-O3 -DNDEBUG -D_FILE_OFFSET_BITS=64 -arch arm64 -mmacosx-version-min=14.0' libbz2.a
-make -C "$build" -j "$jobs" \
+run test make -C "$build" -j "$jobs" \
   'CC=/usr/bin/clang' 'AR=/usr/bin/ar' 'RANLIB=/usr/bin/ranlib' \
   'CFLAGS=-O3 -DNDEBUG -D_FILE_OFFSET_BITS=64 -arch arm64 -mmacosx-version-min=14.0' check
 [ -f "$build/libbz2.a" ] || die 'missing built archive'
@@ -54,7 +55,7 @@ int main(void) {
     return restored_size == sizeof input && memcmp(restored, input, sizeof input) == 0 ? 0 : 3;
 }
 C
-"$CC" -arch arm64 -mmacosx-version-min=14.0 \
+run consumer-compile "$CC" -arch arm64 -mmacosx-version-min=14.0 \
   "-I$stage/include" "$build/bzip2-consumer.c" "$stage/lib/libbz2.a" \
   -o "$build/bzip2-consumer"
-"$build/bzip2-consumer"
+run consumer-run "$build/bzip2-consumer"

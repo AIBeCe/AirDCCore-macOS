@@ -37,7 +37,7 @@ if name == "make":
         subprocess.run(["ar", "rcs", str(source / "libbz2.a")], check=True)
 elif name == "cmake":
     if args[0] == "--build":
-        subprocess.run(["ninja", "-C", args[1], args[-1]], check=True)
+        subprocess.run(["ninja", "-C", args[1], *args[args.index("--target") + 1:]], check=True)
     elif args[0] == "--install":
         build = Path(args[1])
         stage = Path((build / "stage.txt").read_text())
@@ -46,8 +46,11 @@ elif name == "cmake":
             target = stage / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source / Path(relative).name, target)
-        for relative, data in (("lib/cmake/ZLIB/ZLIBConfig.cmake", "# fixture\n"),
-                               ("lib/pkgconfig/zlib.pc", "Name: zlib\n")):
+        for relative, data in (("lib/cmake/zlib/ZLIBConfig.cmake", "# fixture\n"),
+                               ("lib/cmake/zlib/ZLIBConfigVersion.cmake", "# fixture\n"),
+                               ("lib/cmake/zlib/ZLIB-static.cmake", "# fixture\n"),
+                               ("lib/cmake/zlib/ZLIB-static-release.cmake", "# fixture\n"),
+                               ("lib/pkgconfig/zlib.pc", "prefix=/tmp/stage\nexec_prefix=/tmp/stage\nName: zlib\nVersion: 1.3.2\nLibs: -L${exec_prefix}/lib -lz\nCflags: -I${prefix}/include\n")):
             target = stage / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(data)
@@ -59,7 +62,15 @@ elif name == "cmake":
         (build / "source.txt").write_text(args[args.index("-S") + 1])
         (build / "stage.txt").write_text(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-DCMAKE_INSTALL_PREFIX=")))
 elif name == "ninja":
-    subprocess.run(["ar", "rcs", str(Path(args[args.index("-C") + 1]) / "libz.a")], check=True)
+    build = Path(args[args.index("-C") + 1])
+    for target in args[args.index("-C") + 2:]:
+        if target == "zlibstatic":
+            subprocess.run(["ar", "rcs", str(build / "libz.a")], check=True)
+        elif target == "zlib_static_example":
+            (build / "zlib_static_example").write_text("built\n")
+elif name == "ctest":
+    if not (Path(args[args.index("--test-dir") + 1]) / "zlib_static_example").exists():
+        sys.exit(30)
 elif name == "ar":
     Path(args[-1]).write_bytes(b"fixture archive\n")
 elif name == "clang":
@@ -96,6 +107,7 @@ class AdapterTests(unittest.TestCase):
                     "SOURCE_DATE_EPOCH": "1563040227"}
         for name in ("bzlib.h", "zlib.h", "zconf.h", "LICENSE"):
             (self.source / name).write_text(name + "\n")
+        self.source_manifest = sorted((p.relative_to(self.source).as_posix(), p.read_bytes()) for p in self.source.rglob("*"))
 
     def invoke(self, adapter, *, epoch="1563040227", extra=(), failure=None):
         env = dict(self.env)
@@ -131,6 +143,7 @@ class AdapterTests(unittest.TestCase):
         for token in ('#include <bzlib.h>', '"AirDCCore"', "BZ2_bzBuffToBuffCompress", "BZ2_bzBuffToBuffDecompress"):
             self.assertIn(token, body)
         self.assertNotIn(str(self.source), body)
+        self.assertEqual(self.source_manifest, sorted((p.relative_to(self.source).as_posix(), p.read_bytes()) for p in self.source.rglob("*")))
 
     def test_zlib_exact_out_of_tree_cmake_ctest_stage_and_installed_consumer(self):
         result = self.invoke(ZLIB, epoch="1771332426")
@@ -142,8 +155,8 @@ class AdapterTests(unittest.TestCase):
                                        "-DZLIB_BUILD_TESTING=ON", "-DCMAKE_OSX_ARCHITECTURES=arm64",
                                        "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0",
                                        "-DCMAKE_INSTALL_PREFIX=" + str(self.stage)])
-        self.assertEqual(commands[1:6], [["cmake", "--build", str(self.build), "--parallel", "3", "--target", "zlibstatic"],
-                                         ["ninja", "-C", str(self.build), "zlibstatic"],
+        self.assertEqual(commands[1:6], [["cmake", "--build", str(self.build), "--parallel", "3", "--target", "zlibstatic", "zlib_static_example"],
+                                         ["ninja", "-C", str(self.build), "zlibstatic", "zlib_static_example"],
                                          ["ar", "rcs", str(self.build / "libz.a")],
                                          ["ctest", "--test-dir", str(self.build), "--output-on-failure"],
                                          ["cmake", "--install", str(self.build)]])
@@ -151,17 +164,21 @@ class AdapterTests(unittest.TestCase):
                                        "-I" + str(self.stage / "include"), str(self.build / "zlib-consumer.c"),
                                        str(self.stage / "lib/libz.a"), "-o", str(self.build / "zlib-consumer")])
         self.assertEqual(self.staged(), ["LICENSE", "include/zconf.h", "include/zlib.h",
-                                         "lib/cmake/ZLIB/ZLIBConfig.cmake", "lib/libz.a", "lib/pkgconfig/zlib.pc"])
+                                         "lib/cmake/zlib/ZLIB-static-release.cmake", "lib/cmake/zlib/ZLIB-static.cmake",
+                                         "lib/cmake/zlib/ZLIBConfig.cmake", "lib/cmake/zlib/ZLIBConfigVersion.cmake",
+                                         "lib/libz.a", "lib/pkgconfig/zlib.pc"])
+        self.assertNotIn(str(self.stage), (self.stage / "lib/pkgconfig/zlib.pc").read_text())
         self.assertEqual(self.run_log.read_text(), "consumer-run\n")
         body = (self.build / "zlib-consumer.c").read_text()
         for token in ('#include <zlib.h>', '"AirDCCore"', "compress2", "uncompress"):
             self.assertIn(token, body)
         self.assertNotIn(str(self.source), body)
+        self.assertEqual(self.source_manifest, sorted((p.relative_to(self.source).as_posix(), p.read_bytes()) for p in self.source.rglob("*")))
 
     def test_failure_stops_before_install_or_consumer(self):
         for adapter, epoch, failures in ((BZIP2, "1563040227", ("make:libbz2.a", "make:check", "clang:bzip2-consumer")),
                                          (ZLIB, "1771332426", ("cmake:-DCMAKE_INSTALL_PREFIX=" + str(self.stage),
-                                                                  "cmake:zlibstatic", "ctest:--output-on-failure",
+                                                                  "cmake:zlib_static_example", "ctest:--output-on-failure",
                                                                   "cmake:" + str(self.build), "clang:zlib-consumer"))):
             for failure in failures:
                 with self.subTest(adapter=adapter.name, failure=failure):

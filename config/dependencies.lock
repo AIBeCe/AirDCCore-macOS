@@ -71,7 +71,10 @@
         "include/zlib.h"
       ],
       "expected_metadata": [
-        "lib/cmake/ZLIB/ZLIBConfig.cmake",
+        "lib/cmake/zlib/ZLIB-static-release.cmake",
+        "lib/cmake/zlib/ZLIB-static.cmake",
+        "lib/cmake/zlib/ZLIBConfig.cmake",
+        "lib/cmake/zlib/ZLIBConfigVersion.cmake",
         "lib/pkgconfig/zlib.pc"
       ],
       "forbidden_globs": [

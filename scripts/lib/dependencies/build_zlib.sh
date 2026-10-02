@@ -2,6 +2,7 @@
 set -eu
 
 die() { printf '%s\n' "zlib adapter: $*" >&2; exit 2; }
+run() { purpose=$1; shift; printf 'adapter-command\t%s' "$purpose"; for arg in "$@"; do printf '\t%s' "$arg"; done; printf '\n'; set +e; "$@"; status=$?; set -e; printf 'adapter-status\t%s\t%s\n' "$purpose" "$status"; return "$status"; }
 [ "$#" -eq 5 ] || die 'expected SOURCE BUILD STAGE JOBS EPOCH'
 source=$1
 build=$2
@@ -24,17 +25,23 @@ case "$epoch" in ''|*[!0-9]*) die 'EPOCH must be a nonnegative integer' ;; esac
 : "${CC:?CC is required}"
 [ -f "$source/LICENSE" ] || die 'missing source license'
 
-cmake -S "$source" -B "$build" \
+run configure cmake -S "$source" -B "$build" \
   -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=ON \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
   "-DCMAKE_INSTALL_PREFIX=$stage"
-cmake --build "$build" --parallel "$jobs" --target zlibstatic
-ctest --test-dir "$build" --output-on-failure
-cmake --install "$build"
+run build cmake --build "$build" --parallel "$jobs" --target zlibstatic zlib_static_example
+run test ctest --test-dir "$build" --output-on-failure
+run install cmake --install "$build"
+rm -rf "$stage/share"
+pc="$stage/lib/pkgconfig/zlib.pc"
+[ -f "$pc" ] || die 'missing installed pkg-config metadata'
+sed -e 's|^prefix=.*|prefix=|' -e 's|^exec_prefix=.*|exec_prefix=${prefix}|' "$pc" > "$pc.tmp"
+mv "$pc.tmp" "$pc"
 cp "$source/LICENSE" "$stage/LICENSE"
 for path in "$stage/include/zlib.h" "$stage/include/zconf.h" "$stage/lib/libz.a" \
-    "$stage/lib/cmake/ZLIB/ZLIBConfig.cmake" "$stage/lib/pkgconfig/zlib.pc"; do
+    "$stage/lib/cmake/zlib/ZLIBConfig.cmake" "$stage/lib/cmake/zlib/ZLIBConfigVersion.cmake" \
+    "$stage/lib/cmake/zlib/ZLIB-static.cmake" "$stage/lib/cmake/zlib/ZLIB-static-release.cmake" "$stage/lib/pkgconfig/zlib.pc"; do
   [ -f "$path" ] && [ ! -L "$path" ] || die "missing installed output: $path"
 done
 
@@ -53,7 +60,7 @@ int main(void) {
     return restored_size == sizeof input && memcmp(restored, input, sizeof input) == 0 ? 0 : 3;
 }
 C
-"$CC" -arch arm64 -mmacosx-version-min=14.0 \
+run consumer-compile "$CC" -arch arm64 -mmacosx-version-min=14.0 \
   "-I$stage/include" "$build/zlib-consumer.c" "$stage/lib/libz.a" \
   -o "$build/zlib-consumer"
-"$build/zlib-consumer"
+run consumer-run "$build/zlib-consumer"
