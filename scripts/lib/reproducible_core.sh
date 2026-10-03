@@ -183,6 +183,10 @@ def check_summary(prefixes, sdk, toolchain, tools):
         elif category == 'apple-thread-toolchain':
             if target != 'Threads::Threads' or value not in ('-pthread', '-lpthread', 'pthread'):
                 fail('unreviewed thread toolchain resolution')
+        elif category == 'reviewed-compile-option':
+            if (not re.fullmatch(r'INTERFACE_COMPILE_OPTIONS(?:_[A-Z0-9_]+)?', prop)
+                    or value not in ('-Werror', '-Wthread-safety', '-pthread')):
+                fail('unreviewed normalized compile option')
         else:
             fail('unknown dependency resolution classification')
     if not set(TARGETS).issubset(seen):

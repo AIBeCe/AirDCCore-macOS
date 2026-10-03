@@ -275,6 +275,7 @@ else:
             ))
         lines.extend((
             'add_library(Threads::Threads INTERFACE IMPORTED GLOBAL)',
+            'set_property(TARGET Threads::Threads PROPERTY INTERFACE_COMPILE_OPTIONS "-pthread")',
             'set_property(TARGET leveldb::leveldb PROPERTY '
             'INTERFACE_LINK_LIBRARIES "snappy;Threads::Threads")',
             'add_library(Iconv::Iconv INTERFACE IMPORTED GLOBAL)',
@@ -324,6 +325,8 @@ else:
                       + str(self.case / 'Build/prefix/bzip2/include/headers with spaces')
                       + '\n', summary)
         self.assertEqual((self.output / 'build-exit-code.txt').read_text(), '0\n')
+        self.assertIn('Threads::Threads\tINTERFACE_COMPILE_OPTIONS\treviewed-compile-option\t-pthread',
+                      (self.output/'dependency-resolution.tsv').read_text())
 
     def test_rejects_stale_fingerprint(self):
         write(self.case/'Build/dependencies/bzip2/evidence/input-fingerprint.txt', '0'*64+'\n')
@@ -403,6 +406,25 @@ airdcpp_record_dependency_resolution("{work}/build/dependency-resolution.tsv" le
         self.assertIn('Snappy::snappy\tIMPORTED_LOCATION\tcomponent:snappy', report)
         self.assertIn('generator-target\t$<LINK_ONLY:Threads::Threads>', report)
 
+    def test_records_reviewed_compile_options_link_directories_and_sources(self):
+        result, work = self.configure('''
+file(WRITE "@WORK@/snappy/include/fixture.cpp" "int fixture() { return 1; }")
+set_property(TARGET Snappy::snappy PROPERTY INTERFACE_COMPILE_OPTIONS "-Werror;-Wthread-safety;-pthread")
+set_property(TARGET Snappy::snappy PROPERTY INTERFACE_COMPILE_OPTIONS_RELEASE "-pthread")
+set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_DIRECTORIES "@WORK@/snappy/lib")
+set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_DIRECTORIES_RELEASE "@WORK@/snappy/lib")
+set_property(TARGET Snappy::snappy PROPERTY INTERFACE_SOURCES "@WORK@/snappy/include/fixture.cpp")
+set_property(TARGET Snappy::snappy PROPERTY INTERFACE_SOURCES_RELEASE "@WORK@/snappy/include/fixture.cpp")
+''')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        report = (work/'build/dependency-resolution.tsv').read_text()
+        for option in ('-Werror', '-Wthread-safety', '-pthread'):
+            self.assertIn('Snappy::snappy\tINTERFACE_COMPILE_OPTIONS\treviewed-compile-option\t'+option, report)
+        self.assertIn('Snappy::snappy\tINTERFACE_COMPILE_OPTIONS_RELEASE\treviewed-compile-option\t-pthread', report)
+        for suffix in ('', '_RELEASE'):
+            self.assertIn('Snappy::snappy\tINTERFACE_LINK_DIRECTORIES'+suffix+'\tcomponent:snappy\t$PREFIX/snappy/lib', report)
+            self.assertIn('Snappy::snappy\tINTERFACE_SOURCES'+suffix+'\tcomponent:snappy\t$PREFIX/snappy/include/fixture.cpp', report)
+
     def test_real_wrapper_reproducible_mode_accepts_pinned_style_interface(self):
         result, work = self.configure()
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
@@ -445,6 +467,16 @@ airdcpp_record_dependency_resolution("{work}/build/dependency-resolution.tsv" le
             ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_LIBRARIES evil)', 'unreviewed plain linker item'),
             ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_LIBRARIES "$<IF:$<BOOL:1>,/opt/homebrew/lib/evil.a,Threads::Threads>")', 'unsafe generator expression'),
             ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_OPTIONS -L/opt/homebrew/lib)', 'unreviewed plain linker item'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_COMPILE_OPTIONS "-I/opt/homebrew/include")', 'unreviewed compile option'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_COMPILE_OPTIONS "-isystem;/opt/homebrew/include")', 'unreviewed compile option'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_COMPILE_OPTIONS_RELEASE "-fno-rtti")', 'unreviewed compile option'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_COMPILE_OPTIONS "$<$<BOOL:1>:-pthread>")', 'unsafe generator expression'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_DIRECTORIES /opt/homebrew/lib)', 'undeclared dependency path'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_DIRECTORIES_RELEASE /opt/homebrew/lib)', 'undeclared dependency path'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_LINK_DIRECTORIES "$<LINK_ONLY:Threads::Threads>")', 'undeclared dependency path'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_SOURCES /opt/homebrew/include/foreign.cpp)', 'undeclared dependency path'),
+            ('set_property(TARGET Snappy::snappy PROPERTY INTERFACE_SOURCES_RELEASE /opt/homebrew/include/foreign.cpp)', 'undeclared dependency path'),
+            ('file(WRITE "@WORK@/foreign.cpp" "int foreign() { return 1; }")\nfile(CREATE_LINK "@WORK@/foreign.cpp" "@WORK@/snappy/include/escape.cpp" SYMBOLIC)\nset_property(TARGET Snappy::snappy PROPERTY INTERFACE_SOURCES "@WORK@/snappy/include/escape.cpp")', 'undeclared dependency path'),
         )
         for code, message in cases:
             with self.subTest(message=message):
