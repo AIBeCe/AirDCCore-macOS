@@ -181,6 +181,41 @@ class LinkEvidenceTests(unittest.TestCase):
                                     '/usr/local/ssl/../opt/evil.a'])
         self.assertIn('/usr/local/ssl/cert.pem',observed)
 
+    def test_strict_mode_reads_each_bundled_linker_input(self):
+        prefix=self.project/'prefix'
+        prefix.mkdir()
+        archive=prefix/'libssl.a'
+        archive.touch()
+        for option,want in (
+            ('-Wl,-dead_strip,-lSystem',[('system','-lSystem')]),
+            ('-Wl,-dead_strip,-framework,CoreFoundation,-lresolv',
+             [('framework','CoreFoundation'),('system','-lresolv')]),
+            (f'-Wl,-dead_strip,{archive}',[('component:openssl','libssl.a')]),
+            (f'-Wl,-dead_strip,-force_load,{archive},-lSystem',
+             [('component:openssl','libssl.a'),('system','-lSystem')]),
+        ):
+            with self.subTest(option=option):
+                rows=EVIDENCE.parse_link_command(f'clang++ "{archive}" "{option}" -o app',
+                                                self.project,{'openssl':prefix.resolve()})
+                self.assertEqual(rows,[('component:openssl','libssl.a')]+
+                                 [row for row in want if row!=('component:openssl','libssl.a')])
+
+    def test_strict_mode_rejects_unsupported_bundled_input_forms(self):
+        prefix=self.project/'prefix'
+        prefix.mkdir()
+        archive=prefix/'libssl.a'
+        archive.touch()
+        for option in ('-Wl,-dead_strip,-weak-lSystem', '-Wl,-dead_strip,-reexport_library,/usr/lib/libSystem.dylib',
+                       '-Wl,-dead_strip,@inputs.rsp', '-Wl,-framework', '-Wl,-dead_strip,,'):
+            with self.subTest(option=option):
+                with self.assertRaisesRegex(ValueError,'linker'):
+                    EVIDENCE.parse_link_command(f'clang++ "{archive}" "{option}" -o app',
+                                                self.project,{'openssl':prefix.resolve()})
+
+    def test_legacy_mode_keeps_historical_bundled_option_behavior(self):
+        self.assertEqual(EVIDENCE.parse_link_command('clang++ -lSystem -Wl,-dead_strip,-lresolv -o app',self.project),
+                         [('system','-lSystem')])
+
     def test_malformed_omission_row_does_not_publish_output(self):
         self.output.write_text("preserve me\n", encoding="utf-8")
         self.command.write_text("/usr/bin/clang++ main.o -lSystem -o app\n", encoding="utf-8")

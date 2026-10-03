@@ -56,6 +56,11 @@ class ConsumerTests(unittest.TestCase):
         checked('git','-C',str(checkout),'remote','add','origin','https://example.invalid/core.git')
         write(cls.template/'config/upstream.env',
               'AIRDCPP_CORE_URL=https://example.invalid/core.git\nAIRDCPP_CORE_COMMIT='+cls.pin+'\n')
+        # Locked patches must be tracked by the consuming project, as in the
+        # real checkout. Keep that provenance check active in private fixtures.
+        checked('git','init','-q',str(cls.template))
+        for patch in (cls.template/'config/patches').glob('*'):
+            checked('git','-C',str(cls.template),'add',str(patch.relative_to(cls.template)))
         symbols = {'bzip2':'bz2','zlib':'z','openssl':'ssl','miniupnpc':'mini',
                    'leveldb':'level','libmaxminddb':'max','snappy':'snappy','boost':'boost'}
         for record in cls.lock.dependencies:
@@ -209,6 +214,15 @@ exec(compile(sys.stdin.read(),'<consumer>', 'exec'),{{'__name__':'__main__'}})
     def test_runtime_pin_is_enforced(self):
         self.make_core('wrong')
         self.failed('consumer runtime identity differs from pinned Core')
+
+    def test_compound_driver_flag_cannot_add_explicit_system_link(self):
+        cmake=self.case/'smoke-test/CMakeLists.txt'
+        cmake.write_text(cmake.read_text()+
+            '\ntarget_link_options(airdcpp-smoke PRIVATE "-Wl,-dead_strip,-lSystem")\n')
+        self.failed('link contract differs from ADR 0001')
+        self.assertIn('-Wl,-dead_strip,-lSystem',(self.output/'link-command.raw.txt').read_text())
+        self.assertEqual((self.output/'full/build-exit-code.txt').read_text(),'0\n')
+        self.assertFalse((self.output/'adr-comparison.txt').exists())
 
     def test_path_leak_is_rejected_but_declared_openssl_defaults_are_recorded(self):
         self.make_core(self.pin,'__attribute__((used)) static const char leaked[]="/opt/homebrew/lib/libforeign.a";')

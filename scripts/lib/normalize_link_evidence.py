@@ -152,9 +152,43 @@ def parse_link_command(command: str, project_root: Path,
             seen.add(row)
             rows.append(row)
 
+    def bundled_linker_options(argument: str) -> None:
+        # Apple Clang forwards every comma-separated member to ld. Strict
+        # evidence must inspect the complete bundle, not its first option.
+        options = argument[4:].split(',')
+        position = 0
+        while position < len(options):
+            option = options[position]
+            if option in ('-search_paths_first', '-headerpad_max_install_names', '-dead_strip'):
+                position += 1
+                continue
+            if option in ('-force_load', '-framework'):
+                if position+1 >= len(options) or not options[position+1] or options[position+1].startswith('-'):
+                    fail(f'malformed bundled linker option: {argument}')
+                value = options[position+1]
+                if option == '-force_load':
+                    append(*classify_library(value, project_root, prefixes))
+                else:
+                    append('framework', value)
+                position += 2
+                continue
+            if option.startswith('-l') and len(option) > 2:
+                append('system', option)
+            elif option.endswith(('.a', '.dylib', '.tbd')) and not option.startswith('-'):
+                append(*classify_library(option, project_root, prefixes))
+            else:
+                # Response files, weak/re-export inputs and unknown forms
+                # require explicit review rather than silently disappearing.
+                fail(f'unsupported bundled linker option: {option!r}')
+            position += 1
+
     index = 1
     while index < len(arguments):
         argument = arguments[index]
+        if prefixes is not None and argument.startswith('-Wl,'):
+            bundled_linker_options(argument)
+            index += 1
+            continue
         if argument == "-o":
             if index + 1 >= len(arguments):
                 fail("link command has -o without an output")
