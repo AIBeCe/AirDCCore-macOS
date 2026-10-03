@@ -132,35 +132,39 @@ with tempfile.TemporaryDirectory(prefix='leveldb-chain-') as directory:
     cmake = shutil.which('cmake'); ninja = shutil.which('ninja')
     assert cmake and ninja, 'CMake and Ninja are required for the real probe fixture'
     probe = work / 'probe'; probe.mkdir()
-    (probe / 'snappy.c').write_text('int snappy_compress(void) { return 0; }\n')
-    subprocess.run(['/usr/bin/clang', '-arch', 'arm64', '-mmacosx-version-min=14.0', '-c', str(probe / 'snappy.c'), '-o', str(probe / 'snappy.o')], check=True, capture_output=True)
+    (probe / 'snappy.cc').write_text('#include <string>\nextern "C" int snappy_compress(void) { std::string value("fixture"); return value == "fixture" ? 0 : 1; }\n')
+    subprocess.run(['/usr/bin/clang++', '-arch', 'arm64', '-mmacosx-version-min=14.0', '-c', str(probe / 'snappy.cc'), '-o', str(probe / 'snappy.o')], check=True, capture_output=True)
     archive = work / 'snappy-stage/lib/libsnappy.a'; archive.unlink()
     subprocess.run(['/usr/bin/ar', 'rcs', str(archive), str(probe / 'snappy.o')], check=True, capture_output=True)
-    (probe / 'leveldb.c').write_text('extern int snappy_compress(void); int leveldb(void) { return snappy_compress(); }\n')
-    (probe / 'main.c').write_text('extern int leveldb(void); int main(void) { return leveldb(); }\n')
+    (probe / 'leveldb.cc').write_text('extern "C" int snappy_compress(void); int leveldb(void) { return snappy_compress(); }\n')
+    (probe / 'main.cc').write_text('extern int leveldb(void); int main(void) { return leveldb(); }\n')
     (probe / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.20)
-project(leveldb-probe LANGUAGES C)
+project(leveldb-probe LANGUAGES C CXX)
 include(CheckLibraryExists)
 check_library_exists(snappy snappy_compress "" HAVE_SNAPPY)
 if(NOT HAVE_SNAPPY)
   message(FATAL_ERROR "Locked Snappy probe failed")
 endif()
-add_library(leveldb STATIC leveldb.c)
+add_library(leveldb STATIC leveldb.cc)
 target_link_libraries(leveldb snappy)
 find_package(Threads REQUIRED)
 target_link_libraries(leveldb Threads::Threads)
-add_executable(leveldbutil main.c)
+add_executable(leveldbutil main.cc)
 target_link_libraries(leveldbutil PRIVATE leveldb)
 install(TARGETS leveldb EXPORT leveldbTargets ARCHIVE DESTINATION lib)
 install(EXPORT leveldbTargets NAMESPACE leveldb:: DESTINATION lib/cmake/leveldb)
 ''')
     probe_build = work / 'probe-build'; probe_stage = work / 'probe-stage'
-    command = [cmake, '-S', str(probe), '-B', str(probe_build), '-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + ninja, '-DCMAKE_C_COMPILER=/usr/bin/clang', '-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', '-DCMAKE_PROJECT_INCLUDE=' + str(work / 'leveldb-build/locked-snappy.cmake'), '-DCMAKE_REQUIRED_FLAGS=-L' + str(archive.parent), '-DCMAKE_INSTALL_PREFIX=' + str(probe_stage)]
+    command = [cmake, '-S', str(probe), '-B', str(probe_build), '-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + ninja, '-DCMAKE_C_COMPILER=/usr/bin/clang', '-DCMAKE_CXX_COMPILER=/usr/bin/clang++', '-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', '-DCMAKE_PROJECT_INCLUDE=' + str(work / 'leveldb-build/locked-snappy.cmake'), '-DCMAKE_REQUIRED_FLAGS=-L' + str(archive.parent), '-DCMAKE_INSTALL_PREFIX=' + str(probe_stage)]
+    # Exercise the adapter's actual check-time runtime inputs against the real
+    # C++ archive, instead of letting the fake configure invent probe success.
+    command += [arg for arg in configurations[2]['argv'] if arg.startswith('-DCMAKE_REQUIRED_LIBRARIES=')]
     clean_env = {key: value for key, value in os.environ.items() if key not in ('CMAKE_PREFIX_PATH', 'PKG_CONFIG_PATH', 'CMAKE_LIBRARY_PATH', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS')}
     for argv in (command, [cmake, '--build', str(probe_build)], [cmake, '--install', str(probe_build)]):
         result = subprocess.run(argv, env=clean_env, capture_output=True, text=True); assert result.returncode == 0, result.stdout + result.stderr
+    assert 'HAVE_SNAPPY:INTERNAL=1' in (probe_build / 'CMakeCache.txt').read_text()
     commands = subprocess.check_output([ninja, '-C', str(probe_build), '-t', 'commands', 'leveldbutil'], text=True)
-    assert str(archive) in commands and '/opt/homebrew/lib/libsnappy' not in commands
+    assert '/usr/bin/clang++' in commands and str(archive) in commands and '/opt/homebrew/lib/libsnappy' not in commands
     exported = (probe_stage / 'lib/cmake/leveldb/leveldbTargets.cmake').read_text()
     assert 'INTERFACE_LINK_LIBRARIES "snappy;Threads::Threads"' in exported and str(archive) not in exported
     log = probe_build / 'CMakeFiles/CMakeConfigureLog.yaml'
@@ -173,23 +177,23 @@ install(EXPORT leveldbTargets NAMESPACE leveldb:: DESTINATION lib/cmake/leveldb)
     package.write_text('add_library(Snappy::snappy STATIC IMPORTED)\nset_target_properties(Snappy::snappy PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../libsnappy.a")\n')
     (probe_stage / 'lib/cmake/leveldb/leveldbConfig.cmake').write_text('include("${CMAKE_CURRENT_LIST_DIR}/leveldbTargets.cmake")\n')
     downstream = work / 'downstream'; downstream.mkdir()
-    (downstream / 'main.c').write_text((probe / 'main.c').read_text())
+    (downstream / 'main.cc').write_text((probe / 'main.cc').read_text())
     (downstream / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.20)
-project(installed-probe LANGUAGES C)
+project(installed-probe LANGUAGES C CXX)
 find_package(Snappy CONFIG REQUIRED NO_DEFAULT_PATH PATHS "''' + str(package.parent) + '''")
 find_package(Threads REQUIRED)
 find_package(leveldb CONFIG REQUIRED NO_DEFAULT_PATH PATHS "''' + str(probe_stage / 'lib/cmake/leveldb') + '''")
-add_executable(installed-probe main.c)
+add_executable(installed-probe main.cc)
 target_link_libraries(installed-probe PRIVATE leveldb::leveldb)
 file(GENERATE OUTPUT resolved.txt CONTENT "$<TARGET_FILE:Snappy::snappy>\\n")
 ''')
     downstream_build = work / 'downstream-build'
-    configure = [cmake, '-S', str(downstream), '-B', str(downstream_build), '-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + ninja, '-DCMAKE_C_COMPILER=/usr/bin/clang', '-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', '-DCMAKE_PROJECT_INCLUDE=' + str(work / 'leveldb-build/locked-snappy.cmake'), '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON', '-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF', '-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF', '-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF']
+    configure = [cmake, '-S', str(downstream), '-B', str(downstream_build), '-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + ninja, '-DCMAKE_C_COMPILER=/usr/bin/clang', '-DCMAKE_CXX_COMPILER=/usr/bin/clang++', '-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0', '-DCMAKE_PROJECT_INCLUDE=' + str(work / 'leveldb-build/locked-snappy.cmake'), '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON', '-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF', '-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF', '-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF']
     for argv in (configure, [cmake, '--build', str(downstream_build)]):
         result = subprocess.run(argv, env=clean_env, capture_output=True, text=True); assert result.returncode == 0, result.stdout + result.stderr
     resolved = Path((downstream_build / 'resolved.txt').read_text().strip()).resolve(); assert resolved == archive
     commands = subprocess.check_output([ninja, '-C', str(downstream_build), '-t', 'commands', 'installed-probe'], text=True)
-    assert str(archive) in commands and str(probe_stage / 'lib/libleveldb.a') in commands
+    assert '/usr/bin/clang++' in commands and str(archive) in commands and str(probe_stage / 'lib/libleveldb.a') in commands
     subprocess.run([str(downstream_build / 'installed-probe')], check=True)
     package.write_text('# Deliberately broken target contract\n')
     broken = configure.copy(); broken[broken.index('-B') + 1] = str(work / 'broken-downstream')
