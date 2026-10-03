@@ -2,7 +2,8 @@
 set -eu
 
 die() { printf '%s\n' "openssl adapter: $*" >&2; exit 2; }
-run() { purpose=$1; shift; printf 'adapter-command\t%s' "$purpose"; for arg in "$@"; do printf '\t%s' "$arg"; done; printf '\n'; set +e; "$@"; status=$?; set -e; printf 'adapter-status\t%s\t%s\n' "$purpose" "$status"; return "$status"; }
+helper=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/network_adapter.py
+run() { purpose=$1; shift; set +e; python3 "$helper" run "$purpose" "$@"; status=$?; set -e; return "$status"; }
 [ "$#" -eq 5 ] || die 'expected SOURCE BUILD STAGE JOBS EPOCH'
 source=$1; build=$2; stage=$3; jobs=$4; epoch=$5
 for path in "$source" "$build" "$stage"; do
@@ -19,12 +20,21 @@ case "$epoch" in ''|*[!0-9]*) die 'EPOCH must be a nonnegative integer' ;; esac
 : "${CC:?CC is required}"
 [ -f "$source/Configure" ] && [ -f "$source/LICENSE.txt" ] || die 'missing OpenSSL source input'
 cp -R "$source/." "$build/"
-run configure perl "$build/Configure" darwin64-arm64-cc no-shared no-pinshared "--prefix=$stage" "--openssldir=$stage/ssl" -arch arm64 -mmacosx-version-min=14.0
-run build make -C "$build" -j "$jobs"
-run test make -C "$build" -j "$jobs" test
-run install make -C "$build" install_dev
-[ -f "$stage/include/openssl/ssl.h" ] && [ -f "$stage/include/openssl/crypto.h" ] || die 'missing installed OpenSSL headers'
-[ -f "$stage/lib/libssl.a" ] && [ -f "$stage/lib/libcrypto.a" ] || die 'missing installed OpenSSL archives'
+(CDPATH= cd -- "$build" && run configure perl "$build/Configure" darwin64-arm64-cc no-shared no-pinshared "--prefix=$stage" "--openssldir=$stage/ssl" "-arch arm64" -mmacosx-version-min=14.0)
+# Runtime defaults match the pinned Darwin target; INSTALLTOP/libdir still
+# point only at STAGE. Apply the same values to every possible make compile.
+set -- OPENSSLDIR=/usr/local/ssl ENGINESDIR=/usr/local/lib/engines-3 MODULESDIR=/usr/local/lib/ossl-modules
+run build make -C "$build" "-j$jobs" "$@"
+run test make -C "$build" "-j$jobs" "$@" test
+run install make -C "$build" install_dev "$@"
+cp "$source/LICENSE.txt" "$stage/LICENSE.txt"
+python3 "$helper" relocate-pc "$stage/lib/pkgconfig/openssl.pc" "$stage/lib/pkgconfig/libssl.pc" "$stage/lib/pkgconfig/libcrypto.pc"
+# install_dev's complete static development metadata is retained.
+for relative in include/openssl/ssl.h include/openssl/crypto.h lib/libssl.a lib/libcrypto.a \
+    lib/pkgconfig/openssl.pc lib/pkgconfig/libssl.pc lib/pkgconfig/libcrypto.pc \
+    lib/cmake/OpenSSL/OpenSSLConfig.cmake lib/cmake/OpenSSL/OpenSSLConfigVersion.cmake LICENSE.txt; do
+  [ -f "$stage/$relative" ] && [ ! -L "$stage/$relative" ] || die "missing installed output: $relative"
+done
 cat > "$build/openssl-consumer.c" <<'C'
 #include <openssl/evp.h>
 #include <openssl/ssl.h>

@@ -21,6 +21,11 @@ IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*\Z")
 TOKENS = {"@SOURCE@", "@BUILD@", "@STAGE@", "@JOBS@", "@EPOCH@",
           "@PREFIX:snappy@", "@SDKROOT@"}
 SYSTEM_TOOL_OPTIONS = {"CC=/usr/bin/clang", "AR=/usr/bin/ar", "RANLIB=/usr/bin/ranlib"}
+# User-selected OpenSSL runtime defaults, not compiler/dependency search paths.
+# Only OpenSSL's make build/install options may use these exact assignments.
+OPENSSL_RUNTIME_OPTIONS = frozenset({"OPENSSLDIR=/usr/local/ssl",
+                                     "ENGINESDIR=/usr/local/lib/engines-3",
+                                     "MODULESDIR=/usr/local/lib/ossl-modules"})
 UNSAFE_OPTION = re.compile(r"[\x00-\x1f\x7f;&|`$<>\\\"']")
 
 
@@ -145,7 +150,7 @@ def _strings(value, label: str, validator=_text) -> tuple[str, ...]:
     return tuple(validator(item, label) for item in value)
 
 
-def _option(value, label: str) -> str:
+def _option(value, label: str, runtime_options=frozenset()) -> str:
     value = _text(value, label)
     if UNSAFE_OPTION.search(value):
         raise LockError(f"{label}: unsafe option")
@@ -154,7 +159,7 @@ def _option(value, label: str) -> str:
         residue = residue.replace(token, "")
     if "@" in residue:
         raise LockError(f"{label}: unknown substitution token")
-    if value not in SYSTEM_TOOL_OPTIONS:
+    if value not in SYSTEM_TOOL_OPTIONS and value not in runtime_options:
         path_view = value
         for token in TOKENS:
             path_view = re.sub(re.escape(token) + r"(?:/[A-Za-z0-9_+-][A-Za-z0-9._+-]*)*", "", path_view)
@@ -234,12 +239,15 @@ def _record(value) -> DependencyRecord:
     patches = value["patches"]
     if not isinstance(patches, list):
         raise LockError(f"{name}: patches must be an array")
+    runtime_options = OPENSSL_RUNTIME_OPTIONS if name == "openssl" and adapter == "openssl" else frozenset()
+    def make_option(option, label):
+        return _option(option, label, runtime_options)
     return DependencyRecord(
         name=name, version=version, role=role, source=_source(value["source"]),
         source_date_epoch=epoch, dependencies=dependencies, adapter=adapter,
         configure_options=_strings(value["configure_options"], "configure_options", _option),
-        build_options=_strings(value["build_options"], "build_options", _option),
-        install_options=_strings(value["install_options"], "install_options", _option),
+        build_options=_strings(value["build_options"], "build_options", make_option),
+        install_options=_strings(value["install_options"], "install_options", make_option),
         expected_headers=_strings(value["expected_headers"], "expected_headers", _path),
         expected_archives=_strings(value["expected_archives"], "expected_archives", _path),
         expected_metadata=_strings(value["expected_metadata"], "expected_metadata", _path),

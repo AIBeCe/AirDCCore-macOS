@@ -177,6 +177,38 @@ class DependencyLockTests(unittest.TestCase):
         self.value["dependencies"][0]["build_options"] = ["-j@SHELL@"]
         self.assert_rejected(self.value, "token")
 
+    def test_exact_openssl_runtime_defaults_are_accepted_only_in_build_install(self):
+        options = ["OPENSSLDIR=/usr/local/ssl", "ENGINESDIR=/usr/local/lib/engines-3",
+                   "MODULESDIR=/usr/local/lib/ossl-modules"]
+        for field in ("build_options", "install_options"):
+            value = copy.deepcopy(self.value)
+            record = value["dependencies"][0]
+            record.update(name="openssl", adapter="openssl")
+            record[field] = options
+            result = self.validate_value(value)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_openssl_runtime_exception_does_not_admit_other_host_paths(self):
+        exact = "OPENSSLDIR=/usr/local/ssl"
+        for name, adapter, field, option in (
+            ("fixture", "openssl", "build_options", exact),
+            ("openssl", "cmake", "build_options", exact),
+            ("openssl", "openssl", "configure_options", exact),
+            ("openssl", "openssl", "build_options", "OPENSSLDIR=/etc/ssl"),
+            ("openssl", "openssl", "build_options", "OPENSSLDIR=/usr/local/ssl/"),
+            ("openssl", "openssl", "install_options", "ENGINESDIR=/usr/local/lib64/engines-3"),
+            ("openssl", "openssl", "install_options", "MODULESDIR=/usr/local/lib/other"),
+            ("openssl", "openssl", "build_options", "-I/usr/local/include"),
+            ("openssl", "openssl", "install_options", "-L/usr/local/lib"),
+            ("openssl", "openssl", "build_options", "CPPFLAGS=-I/usr/local/include"),
+        ):
+            with self.subTest(name=name, adapter=adapter, field=field, option=option):
+                value = copy.deepcopy(self.value)
+                record = value["dependencies"][0]
+                record.update(name=name, adapter=adapter)
+                record[field] = [option]
+                self.assert_rejected(value, "host path")
+
     def test_expected_paths_must_be_relative_and_confined(self):
         for path in ("/tmp/escape.h", "include/../escape.h", "include//escape.h"):
             with self.subTest(path=path):
