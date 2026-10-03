@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import sys
 import tempfile
@@ -12,6 +13,53 @@ from pathlib import Path
 
 
 OMISSION_HEADER = "pass\tordinal\tlogical\tclassification\tbuild_exit"
+
+
+def adr_expected_rows(adr: str, sdk_iconv_relative: str) -> list[tuple[str, str]]:
+    """Read the accepted inventories; do not derive policy from observed linkage."""
+    def inventory(heading: str) -> list[str]:
+        parts = adr.split('### '+heading+'\n')
+        if len(parts) != 2:
+            fail('link contract differs from ADR 0001: missing or duplicate inventory')
+        section = parts[1].split('\n##', 1)[0]
+        return [line[2:] for line in section.splitlines() if line.startswith('- ')]
+
+    components = {
+        'AirDC++ Core': ('core', 'stage/lib/libairdcpp.a'),
+        'BZip2': ('component:bzip2', 'lib/libbz2.a'),
+        'zlib': ('component:zlib', 'lib/libz.a'),
+        'OpenSSL SSL': ('component:openssl', 'lib/libssl.a'),
+        'OpenSSL Crypto': ('component:openssl', 'lib/libcrypto.a'),
+        'miniupnpc': ('component:miniupnpc', 'lib/libminiupnpc.a'),
+        'LevelDB': ('component:leveldb', 'lib/libleveldb.a'),
+        'MaxMindDB': ('component:libmaxminddb', 'lib/libmaxminddb.a'),
+        'Snappy': ('component:snappy', 'lib/libsnappy.a'),
+    }
+    declared = inventory('Aggregate component inventory')
+    if len(declared) != len(set(declared)) or set(declared) != set(components):
+        fail('link contract differs from ADR 0001: unreviewed aggregate inventory')
+    if inventory('External Apple system-link inventory') != [
+        'explicit SDK link input: Iconv from the selected macOS SDK',
+        'implicit toolchain load command: libc++ from the selected macOS toolchain/SDK',
+        'implicit toolchain load command: libSystem from the selected macOS SDK',
+        'measured Apple framework requirement: none',
+    ]:
+        fail('link contract differs from ADR 0001: unreviewed system inventory')
+    return [components[label] for label in declared] + [('apple-sdk', sdk_iconv_relative)]
+
+
+def assert_adr_closure(rows: list[tuple[str, str]], adr: str, sdk_iconv_relative: str) -> None:
+    if rows != adr_expected_rows(adr, sdk_iconv_relative):
+        fail('link contract differs from ADR 0001')
+
+
+def classify_runtime_defaults(strings: str, defaults: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Bound the approved OpenSSL runtime directory defaults without permitting provenance."""
+    observed = sorted(set(re.findall(r'/usr/local/[^\s"\x00]+', strings)))
+    rejected = [path for path in observed if '..' in Path(path).parts or not any(
+        path == base or (key == 'OPENSSLDIR' and path.startswith(base+'/'))
+        for key, base in defaults.items())]
+    return observed, rejected
 
 
 def fail(message: str) -> None:
@@ -63,13 +111,31 @@ def normalize_path(value: str, project_root: Path) -> str:
     return value
 
 
-def classify_library(value: str, project_root: Path) -> tuple[str, str]:
+def classify_library(value: str, project_root: Path, prefixes: dict[str, Path] | None = None) -> tuple[str, str]:
     if Path(value).name == "libairdcpp.a" and "/stage/lib/" in value:
+        if prefixes is not None:
+            expected = project_root / 'Build/airdcpp-core/reproducible-link-interface/stage/lib/libairdcpp.a'
+            if Path(value) != expected or not expected.is_file() or expected.is_symlink():
+                fail(f'unclassified link input: {value}')
         return "core", "stage/lib/libairdcpp.a"
+    if prefixes is not None:
+        path = Path(value)
+        if not path.is_absolute():
+            fail(f'unclassified link input: {value}')
+        try:
+            real = path.resolve(strict=True)
+        except OSError:
+            fail(f'unclassified link input: {value}')
+        for name, prefix in prefixes.items():
+            if real.is_relative_to(prefix):
+                return ('apple-sdk' if name == 'apple-sdk' else 'component:'+name,
+                        real.relative_to(prefix).as_posix())
+        fail(f'unclassified link input: {value}')
     return "library", normalize_path(value, project_root)
 
 
-def parse_link_command(command: str, project_root: Path) -> list[tuple[str, str]]:
+def parse_link_command(command: str, project_root: Path,
+                       prefixes: dict[str, Path] | None = None) -> list[tuple[str, str]]:
     try:
         arguments = shlex.split(command, posix=True)
     except ValueError as error:
@@ -111,23 +177,32 @@ def parse_link_command(command: str, project_root: Path) -> list[tuple[str, str]
             archive = argument[len("-Wl,-force_load,") :]
             if not archive:
                 fail("link command has force_load without an archive")
-            append(*classify_library(archive, project_root))
+            append(*classify_library(archive, project_root, prefixes))
             index += 1
             continue
         if argument == "-Xlinker" and index + 3 < len(arguments) and arguments[index + 1] == "-force_load" and arguments[index + 2] == "-Xlinker":
-            append(*classify_library(arguments[index + 3], project_root))
+            append(*classify_library(arguments[index + 3], project_root, prefixes))
             index += 4
             continue
         if argument.startswith("-l") and len(argument) > 2:
             append("system", argument)
             index += 1
             continue
+        if argument.startswith('-Wl,-l'):
+            append('system', argument[4:])
+            index += 1
+            continue
         if argument.endswith(".tbd"):
-            append("system", normalize_path(argument, project_root))
+            if prefixes is None:
+                append("system", normalize_path(argument, project_root))
+            else:
+                append(*classify_library(argument, project_root, prefixes))
             index += 1
             continue
         if argument.endswith((".a", ".dylib")):
-            append(*classify_library(argument, project_root))
+            append(*classify_library(argument, project_root, prefixes))
+        elif argument.endswith('.framework'):
+            append('framework', argument)
         index += 1
 
     if not rows:
@@ -160,6 +235,7 @@ def main() -> int:
     parser.add_argument("--command", required=True, type=Path)
     parser.add_argument("--omissions", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--allowed-prefix", action='append', default=[])
     arguments = parser.parse_args()
     try:
         root = Path(os.path.abspath(arguments.project_root))
@@ -171,13 +247,30 @@ def main() -> int:
         if len(command_lines) != 1:
             fail("link command evidence must contain exactly one nonempty line")
         validate_omissions(arguments.omissions)
-        rows = parse_link_command(command_lines[0], root)
+        prefixes = allowed_prefixes(arguments.allowed_prefix) if arguments.allowed_prefix else None
+        rows = parse_link_command(command_lines[0], root, prefixes)
         validate_output(arguments.output)
         publish(arguments.output, rows)
     except (OSError, ValueError) as error:
         print(f"link-evidence: error: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+def allowed_prefixes(values: list[str]) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for value in values:
+        name, separator, path_text = value.partition('=')
+        path = Path(path_text)
+        if not separator or not re.fullmatch(r'[a-z][a-z0-9-]*', name) or not path.is_absolute():
+            fail(f'invalid allowed prefix: {value}')
+        if name in result or not path.is_dir():
+            fail(f'duplicate or missing allowed prefix: {value}')
+        real = path.resolve(strict=True)
+        if any(real.is_relative_to(existing) or existing.is_relative_to(real) for existing in result.values()):
+            fail('overlapping allowed prefixes')
+        result[name] = real
+    return result
 
 
 if __name__ == "__main__":
