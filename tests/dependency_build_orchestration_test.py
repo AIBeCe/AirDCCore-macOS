@@ -628,6 +628,36 @@ stage=$3
             build.build_all(self.project, self.lock)
         self.assertEqual(before, (evidence.stat().st_mtime_ns, prefix.tree_digest(accepted)))
 
+    def test_forced_rebuild_executes_all_adapters_and_preserves_acceptance(self):
+        marker = self.project / 'forced-runs.txt'
+        for item in self.records:
+            self.write_adapter(item.name, f'/usr/bin/printf "{item.name}\\n" >> "{marker}"\n')
+        self.invoke()
+        first = {item.name: (self.project / f'Build/dependencies/{item.name}/evidence/input-fingerprint.txt').read_bytes()
+                 for item in self.records}
+        with patch.object(build, 'acquire_all'), \
+             patch.object(build, 'resolve_tool_inventory', return_value=self.tools), \
+             patch.object(build, 'job_count', return_value=3):
+            build.build_all(self.project, self.lock, force_rebuild=True)
+        self.assertEqual(marker.read_text().splitlines(), ['a', 'b', 'a', 'b'])
+        for item in self.records:
+            evidence = self.project / f'Build/dependencies/{item.name}/evidence'
+            self.assertEqual((evidence / 'input-fingerprint.txt').read_bytes(), first[item.name])
+            self.assertEqual((evidence / 'attempts/0001/input-fingerprint.txt').read_bytes(), first[item.name])
+        before = filesystem_state(self.project / 'Build')
+        self.invoke()
+        self.assertEqual(filesystem_state(self.project / 'Build'), before)
+        self.assertEqual(marker.read_text().splitlines(), ['a', 'b', 'a', 'b'])
+
+    def test_forced_rebuild_still_refuses_accepted_output_drift(self):
+        self.invoke()
+        header = self.project / 'Build/prefix/a/include/fixture.h'
+        header.write_text('drift\n')
+        with patch.object(build, 'acquire_all'), \
+             patch.object(build, 'resolve_tool_inventory', return_value=self.tools), \
+             self.assertRaisesRegex(build.BuildError, 'accepted output drift'):
+            build.build_all(self.project, self.lock, force_rebuild=True)
+
     def test_same_path_tool_version_change_invalidates_accepted_fingerprint(self):
         only_a = DependencyLock(1, (self.records[0],))
         identity = {"resolved_path": "/opt/homebrew/bin/cmake",

@@ -664,6 +664,8 @@
 
   Execution decision: the complete live process tree runs under the macOS outbound-denying sandbox with localhost permitted for OpenSSL TLS tests. Deterministic socket probes fail closed. Offline `--self-test` fixtures cover descendant confinement, prefix/evidence no-op guards, report identity/ADR/twelve-criterion refusal, and generated-path boundaries. Core/consumer snapshots exclude only their own output; freeze all other project writes and keep outer logs outside the project. Native acceptance/report steps remain pending.
 
+  Review correction: matching reuse also requires a hash-bound confinement attestation for all eight dependency adapters. Missing/stale binding triggers the approved keyword-only `build_all(force_rebuild=True)` path inside the gate sandbox, preserving attempts and retaining normal drift checks. The gate observes every completed adapter before attestation, then proves two ordinary dependency-build no-ops; valid attestation is unchanged. Report checks require actual OS/SDK versions, successful required upstream commands, only approved Snappy/LevelDB GoogleTest exceptions with explicit installed-consumer compensation, and stable evidence references that exclude self-dependent scope snapshots.
+
 - [ ] **Step 4: Execute live acquisition and build gates and capture evidence.**
 
   ```sh

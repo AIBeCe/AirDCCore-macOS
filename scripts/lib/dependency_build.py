@@ -1041,7 +1041,7 @@ def _allowed_roots(paths: BuildPaths):
             "build": paths.component, "home": paths.home}
 
 
-def build_all(project_root: Path, lock: DependencyLock) -> None:
+def build_all(project_root: Path, lock: DependencyLock, *, force_rebuild: bool = False) -> None:
     project_root = Path(os.path.abspath(project_root))
     records = topological_records(lock)
     acquire_all(project_root, lock, True)
@@ -1088,9 +1088,10 @@ def build_all(project_root: Path, lock: DependencyLock) -> None:
                         if not _accepted_evidence_matches(record, target, evidence, report):
                             raise BuildError(f"{record.name}: accepted output drift in evidence or prefix")
                         existing_evidence.check()
-                        accepted[record.name] = target
-                        reports[record.name] = report
-                        continue
+                        if not force_rebuild:
+                            accepted[record.name] = target
+                            reports[record.name] = report
+                            continue
 
         _prepare_component(component, evidence)
         stage = Path(tempfile.mkdtemp(prefix=f".staging-{record.name}-", dir=prefix_root))

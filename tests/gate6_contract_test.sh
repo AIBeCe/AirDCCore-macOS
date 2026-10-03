@@ -24,6 +24,23 @@ import dependency_lock
 from dependency_lock import fingerprint, load_lock
 from normalize_link_evidence import assert_adr_closure
 
+UPSTREAM_CHECKS = {
+    'bzip2': ('upstream-self-tests', ['test']),
+    'zlib': ('upstream-self-tests', ['test']),
+    'openssl': ('upstream-self-tests', ['test']),
+    'miniupnpc': ('upstream-self-tests', ['test']),
+    'libmaxminddb': ('upstream-self-tests', ['test']),
+    'boost': ('locked-regex-thread-build', ['bootstrap', 'build']),
+    'snappy': ('googletest-omission', []),
+    'leveldb': ('googletest-omission', []),
+}
+INSTALLED_CHECKS = {
+    'bzip2': 'bzip2-compression-roundtrip', 'zlib': 'zlib-compression-roundtrip',
+    'openssl': 'openssl-tls-context-and-sha256', 'miniupnpc': 'miniupnpc-parser',
+    'libmaxminddb': 'maxminddb-api', 'snappy': 'snappy-compression-roundtrip',
+    'leveldb': 'leveldb-snappy-persistent-roundtrip', 'boost': 'boost-regex-and-thread',
+}
+
 def fail(message):
     raise ValueError(message)
 
@@ -38,6 +55,8 @@ def evidence(value):
     if (not isinstance(path, str) or not path.startswith('Build/') or
             any(part in ('', '.', '..') for part in path.split('/'))):
         fail('unsafe evidence-relative path')
+    if Path(path).name in ('scope-before.sha256', 'scope-after.sha256'):
+        fail('report cannot bind volatile scope snapshots')
     sha(value['sha256'])
     if live:
         target = root/path
@@ -49,6 +68,55 @@ def evidence(value):
 def nonempty(value, label):
     if not value:
         fail('missing '+label)
+
+def command_statuses(path, purposes):
+    events = []
+    for line in path.read_text(errors='replace').splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('type') in ('command', 'status'):
+            events.append(event)
+    for purpose in purposes:
+        selected = [e for e in events if e.get('purpose') == purpose]
+        if (len(selected) != 2 or selected[0].get('type') != 'command' or
+                not selected[0].get('argv') or selected[1].get('type') != 'status' or
+                selected[1].get('status') != 0):
+            fail('required adapter check did not execute successfully: '+purpose)
+
+def library_checks(record, row):
+    upstream_id, purposes = UPSTREAM_CHECKS[record.name]
+    upstream = row['upstream_checks']
+    if len(upstream) != 1 or upstream[0].get('id') != upstream_id:
+        fail(record.name+': upstream check inventory differs')
+    check = upstream[0]
+    expected = 'OMITTED' if record.name in ('snappy', 'leveldb') else 'PASS'
+    if check['result'] != expected or check.get('purposes') != purposes:
+        fail(record.name+': unauthorized upstream omission/check inventory')
+    adapter_log = f'Build/dependencies/{record.name}/evidence/adapter.log'
+    if expected == 'OMITTED':
+        option = '-D'+record.name.upper()+'_BUILD_TESTS=OFF'
+        if (option not in record.configure_options or check.get('disabled_option') != option or
+                check.get('reason') != 'GoogleTest inputs are not pinned in the locked source configuration' or
+                check.get('compensation') != INSTALLED_CHECKS[record.name] or
+                check['evidence']['path'] != f'Build/dependencies/{record.name}/evidence/expanded-options.json'):
+            fail(record.name+': unapproved GoogleTest omission or compensation')
+    elif check['evidence']['path'] != adapter_log:
+        fail(record.name+': upstream check must bind adapter command/status evidence')
+    installed = row['installed_checks']
+    installed_purposes = (['consumer-configure', 'consumer-build', 'consumer-run']
+        if record.name in ('snappy', 'leveldb', 'boost') else ['consumer-compile', 'consumer-run'])
+    if (len(installed) != 1 or installed[0].get('id') != INSTALLED_CHECKS[record.name] or
+            installed[0]['result'] != 'PASS' or installed[0].get('purposes') != installed_purposes or
+            installed[0]['evidence']['path'] != adapter_log):
+        fail(record.name+': installed-consumer compensation inventory differs')
+    if live:
+        command_statuses(root/adapter_log, purposes+installed_purposes)
+        if expected == 'OMITTED':
+            expanded = json.loads((root/check['evidence']['path']).read_text())
+            if check['disabled_option'] not in expanded['configure']:
+                fail(record.name+': disabled upstream suite differs from command evidence')
 
 def validate():
     lock = load_lock(root/'config/dependencies.lock')
@@ -91,6 +159,7 @@ def validate():
             sha(digest)
         nonempty(row['upstream_checks'], record.name+' upstream checks/omissions')
         nonempty(row['installed_checks'], record.name+' installed-consumer checks')
+        library_checks(record, row)
         for check in row['upstream_checks']+row['installed_checks']:
             if check['result'] not in ('PASS', 'OMITTED'):
                 fail(record.name+': unresolved library check')
@@ -117,6 +186,9 @@ def validate():
         fail('host record is incomplete')
     if data['host']['architecture'] != 'arm64' or data['host']['deployment_target'] != '14.0':
         fail('report platform differs')
+    for field in ('os_version', 'sdk_version'):
+        if not isinstance(data['host'][field], str) or not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,2}', data['host'][field]):
+            fail('missing or invalid host version: '+field)
     for name in ('cmake', 'ninja', 'pkg-config', 'make', 'perl', 'python3', 'clang', 'clang++', 'ar', 'ranlib'):
         nonempty(data['tools'].get(name), 'host/tool version '+name)
     sha(data['core']['archive_sha256'])
@@ -180,7 +252,19 @@ class ReportContracts(unittest.TestCase):
         dependency_lock.ROOT = root
         lock = load_lock(root/'config/dependencies.lock')
         ref = {'path': 'Build/gate6/fixture.json', 'sha256': 'a'*64}
-        check = {'result': 'PASS', 'description': 'fixture check', 'evidence': ref}
+        def checks(r):
+            identifier, purposes = UPSTREAM_CHECKS[r.name]
+            log = dict(path=f'Build/dependencies/{r.name}/evidence/adapter.log', sha256='a'*64)
+            upstream = dict(id=identifier, purposes=purposes, result='PASS', description='required upstream check', evidence=log)
+            if r.name in ('snappy','leveldb'):
+                upstream.update(result='OMITTED', disabled_option='-D'+r.name.upper()+'_BUILD_TESTS=OFF',
+                    reason='GoogleTest inputs are not pinned in the locked source configuration',
+                    compensation=INSTALLED_CHECKS[r.name], evidence=dict(
+                        path=f'Build/dependencies/{r.name}/evidence/expanded-options.json',sha256='a'*64))
+            installed = dict(id=INSTALLED_CHECKS[r.name], result='PASS', description=INSTALLED_CHECKS[r.name],
+                purposes=(['consumer-configure','consumer-build','consumer-run']
+                    if r.name in ('snappy','leveldb','boost') else ['consumer-compile','consumer-run']), evidence=log)
+            return [upstream], [installed]
         from normalize_link_evidence import adr_expected_rows
         self.data = dict(schema_version=1, status='accepted', lock_sha256=fingerprint(lock),
             dependencies=[dict(name=r.name, version=r.version, role=r.role, source_url=r.source.url,
@@ -189,9 +273,9 @@ class ReportContracts(unittest.TestCase):
                 license_paths=list(r.license_paths), patches=[dict(path=p.path, sha256=p.sha256) for p in r.patches],
                 prefix_manifest_sha256='a'*64, prefix_evidence=ref,
                 archives={p:'a'*64 for p in r.expected_archives}, licenses={p:'a'*64 for p in r.license_paths},
-                upstream_checks=[check], installed_checks=[check]) for r in lock.dependencies],
+                upstream_checks=checks(r)[0], installed_checks=checks(r)[1]) for r in lock.dependencies],
             openssl_lts_exception='3.5 LTS replaces 3.6 discovery',
-            host=dict(architecture='arm64', deployment_target='14.0', os_version='fixture', sdk_version='fixture'),
+            host=dict(architecture='arm64', deployment_target='14.0', os_version='26.0', sdk_version='26.0'),
             tools={n:'fixture' for n in ('cmake','ninja','pkg-config','make','perl','python3','clang','clang++','ar','ranlib')},
             core=dict(archive_sha256='a'*64, evidence=ref),
             consumer=dict(runtime_line='AirDC++ Core 55d51ceb817ec006d4ec844d9e3788e1b0ccc352', executable_sha256='a'*64, evidence=ref),
@@ -236,6 +320,30 @@ class ReportContracts(unittest.TestCase):
         self.data['acceptance']['1']['evidence'] = [{'path':'/absolute/Build/fixture','sha256':'a'*64}]
         self.write_report()
         with self.assertRaisesRegex(ValueError, 'unsafe evidence'):
+            validate()
+
+    def test_empty_host_versions_are_rejected(self):
+        for field in ('os_version', 'sdk_version'):
+            previous = self.data['host'][field]
+            self.data['host'][field] = ''
+            self.write_report()
+            with self.assertRaisesRegex(ValueError, 'host version'):
+                validate()
+            self.data['host'][field] = previous
+
+    def test_arbitrary_upstream_omissions_are_rejected(self):
+        row = next(r for r in self.data['dependencies'] if r['name'] == 'openssl')
+        row['upstream_checks'] = [dict(result='OMITTED', description='no reason',
+            evidence={'path':'Build/gate6/fixture.json','sha256':'a'*64})]
+        self.write_report()
+        with self.assertRaisesRegex(ValueError, 'upstream check inventory'):
+            validate()
+
+    def test_report_cannot_bind_volatile_scope_evidence(self):
+        self.data['acceptance']['6']['evidence'] = [dict(
+            path='Build/airdcpp-core/reproducible-release/scope-before.sha256', sha256='a'*64)]
+        self.write_report()
+        with self.assertRaisesRegex(ValueError, 'volatile scope'):
             validate()
 
 if self_test:

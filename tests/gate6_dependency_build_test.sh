@@ -29,11 +29,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 root = Path(sys.argv[1])
 self_test = sys.argv[2:] == ['--self-test']
 sys.path.insert(0, str(root/'scripts/lib'))
 from dependency_acquire import acquire_all
+import dependency_build
 from dependency_build import (_accepted_evidence_matches, _canonical_json, _input_document,
                               _pinned_tools, adapter_path, resolve_tool_inventory)
 from dependency_lock import fingerprint, load_lock, topological_records
@@ -112,6 +114,89 @@ def write(name, value):
         fail('symlinked gate evidence')
     target.write_bytes(_canonical_json(value))
 
+ATTESTED_FIELDS = ('input-fingerprint.txt', 'inputs.json', 'tool-inventory.json',
+    'command.json', 'expanded-options.json', 'adapter.log', 'exit-status.txt',
+    'prefix-report.json', 'install-manifest.jsonl', 'license-inventory.json')
+
+def confinement_binding(lock, confinement):
+    authority = [root/'scripts/build', root/'tests/gate6_dependency_build_test.sh',
+                 root/'tests/gate6_contract_test.sh']
+    authority += sorted((root/'scripts/lib').glob('*.py'))
+    authority += sorted((root/'scripts/lib').glob('*.sh'))
+    authority += sorted((root/'scripts/lib/dependencies').glob('*'))
+    authority = [p for p in authority if p.suffix in ('.py', '.sh') or p.name == 'build']
+    components = {}
+    for record in topological_records(lock):
+        evidence = root/'Build/dependencies'/record.name/'evidence'
+        components[record.name] = {field: digest(evidence/field) for field in ATTESTED_FIELDS}
+        components[record.name]['prefix_manifest_sha256'] = tree_digest(root/'Build/prefix'/record.name)
+    return dict(lock_sha256=fingerprint(lock), confinement=confinement,
+        authority={p.relative_to(root).as_posix(): digest(p) for p in authority}, components=components)
+
+def attestation_document(binding, executed, expected):
+    if executed != expected:
+        fail('confinement attestation requires all locked adapters to complete in order')
+    return dict(schema_version=1, result='PASS', executed_adapters=expected, binding=binding)
+
+def attestation_matches(path, binding, expected):
+    try:
+        return regular(path) == _canonical_json(attestation_document(binding, expected, expected))
+    except FileNotFoundError:
+        return False
+
+def gate_directory():
+    for path in (root/'Build', root/'Build/gate6'):
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            fail('unsafe Gate 6 evidence directory')
+        path.mkdir(exist_ok=True)
+    return root/'Build/gate6'
+
+def archive_attestation(path):
+    if not os.path.lexists(path):
+        return
+    raw = regular(path)
+    history = gate_directory()/'confinement-history'
+    if history.is_symlink() or (history.exists() and not history.is_dir()):
+        fail('unsafe confinement history')
+    history.mkdir(exist_ok=True)
+    target = history/(hashlib.sha256(raw).hexdigest()+'.json')
+    if os.path.lexists(target):
+        if regular(target) != raw:
+            fail('confinement history hash differs')
+        path.unlink()
+    else:
+        path.rename(target)
+
+def establish_confinement(lock, confinement):
+    expected = [r.name for r in topological_records(lock)]
+    path = root/'Build/gate6/dependency-confinement.json'
+    try:
+        binding = confinement_binding(lock, confinement)
+    except FileNotFoundError:
+        binding = None
+    if binding is not None and attestation_matches(path, binding, expected):
+        return path
+    # Preserve the old binding before invalidation; a failed refresh cannot
+    # leave a current PASS marker. The build owner preserves every old attempt.
+    archive_attestation(path)
+    executed = []
+    original = dependency_build.run_adapter
+    def observed(record, *args, **kwargs):
+        result = original(record, *args, **kwargs)
+        executed.append(record.name)
+        return result
+    dependency_build.run_adapter = observed
+    try:
+        dependency_build.build_all(root, lock, force_rebuild=True)
+    finally:
+        dependency_build.run_adapter = original
+    boundaries(root)
+    prefix_reports(lock, resolve_tool_inventory())
+    document = attestation_document(confinement_binding(lock, confinement), executed, expected)
+    gate_directory()
+    write('dependency-confinement.json', document)
+    return path
+
 def prefix_reports(lock, tools):
     reports = {}
     for record in topological_records(lock):
@@ -139,7 +224,8 @@ def main():
     source_before = snapshot(source_paths)
     acquire_all(root, lock, True)
     unchanged(source_before, source_paths, 'accepted sources/cache')
-    command(root/'scripts/build', '--build-dependencies')
+    attestation = establish_confinement(lock, confinement)
+    attestation_before = snapshot([attestation])
     tools = resolve_tool_inventory()
     reports = prefix_reports(lock, tools)
     prefixes = {name: report.manifest_sha256 for name, report in reports.items()}
@@ -147,9 +233,12 @@ def main():
     before = snapshot(paths)
     command(root/'scripts/build', '--build-dependencies')
     unchanged(before, paths, 'prefixes/component evidence')
+    command(root/'scripts/build', '--build-dependencies')
+    unchanged(before, paths, 'prefixes/component evidence')
     repeated = prefix_reports(lock, tools)
     if {name: report.manifest_sha256 for name, report in repeated.items()} != prefixes:
         fail('second dependency build changed prefix fingerprints')
+    unchanged(attestation_before, [attestation], 'confinement attestation')
     # Do not write any Gate 6 evidence while these scoped child modes run.
     command(root/'scripts/build', '--build-reproducible-core')
     command(root/'scripts/build', '--link-reproducible-consumer')
@@ -179,10 +268,7 @@ def main():
     core = root/'Build/airdcpp-core/reproducible-release'
     if regular(core/'scope-before.sha256') != regular(core/'scope-after.sha256'):
         fail('Core outside-output scope changed')
-    gate = root/'Build/gate6'
-    if gate.is_symlink() or (gate.exists() and not gate.is_dir()):
-        fail('unsafe Gate 6 evidence directory')
-    gate.mkdir(exist_ok=True)
+    gate_directory()
     write('network-confinement.json', confinement)
     write('build-validation.json', dict(lock_sha256=fingerprint(lock), prefix_manifests=prefixes,
         dependency_rerun='PASS: prefixes and component evidence unchanged',
@@ -193,6 +279,59 @@ def main():
     print('PASS: Gate 6 sandboxed dependency build, unchanged rerun, Core, consumer, closure, and report')
 
 class OfflineContracts(unittest.TestCase):
+    def test_matching_attestation_is_reused_without_rebuild_or_write(self):
+        global root
+        previous = root
+        lock = load_lock(root/'config/dependencies.lock')
+        expected = [r.name for r in topological_records(lock)]
+        binding = dict(lock_sha256=fingerprint(lock), components={n:{'adapter.log':'a'*64} for n in expected})
+        with tempfile.TemporaryDirectory(prefix='gate6-reuse-', dir='/private/tmp') as name:
+            root = Path(name)
+            path = gate_directory()/'dependency-confinement.json'
+            path.write_bytes(_canonical_json(attestation_document(binding, expected, expected)))
+            before = snapshot([path])
+            try:
+                with patch('__main__.confinement_binding', return_value=binding), \
+                     patch.object(dependency_build, 'build_all', side_effect=AssertionError('unexpected native rebuild')):
+                    self.assertEqual(establish_confinement(lock, {'outbound':'denied'}), path)
+                unchanged(before, [path], 'matching attestation')
+            finally:
+                root = previous
+
+    def test_failed_refresh_has_no_current_attestation_and_preserves_history(self):
+        global root
+        previous = root
+        lock = load_lock(root/'config/dependencies.lock')
+        with tempfile.TemporaryDirectory(prefix='gate6-refresh-', dir='/private/tmp') as name:
+            root = Path(name)
+            path = gate_directory()/'dependency-confinement.json'
+            raw = b'previous binding\n'
+            path.write_bytes(raw)
+            try:
+                with patch('__main__.confinement_binding', return_value={'new': 'binding'}), \
+                     patch.object(dependency_build, 'build_all', side_effect=ValueError('adapter failed')):
+                    with self.assertRaisesRegex(ValueError, 'adapter failed'):
+                        establish_confinement(lock, {'outbound': 'denied'})
+                self.assertFalse(path.exists())
+                history = root/'Build/gate6/confinement-history'/ (hashlib.sha256(raw).hexdigest()+'.json')
+                self.assertEqual(history.read_bytes(), raw)
+            finally:
+                root = previous
+
+    def test_attestation_requires_all_adapters_and_rejects_changed_evidence(self):
+        with tempfile.TemporaryDirectory(prefix='gate6-attestation-', dir='/private/tmp') as name:
+            path = Path(name)/'dependency-confinement.json'
+            binding = dict(lock_sha256='a'*64, components={n: {'adapter.log': 'b'*64} for n in ('a','b')})
+            self.assertFalse(attestation_matches(path, binding, ['a','b']))
+            with self.assertRaisesRegex(ValueError, 'all locked adapters'):
+                attestation_document(binding, ['a'], ['a','b'])
+            path.write_bytes(_canonical_json(attestation_document(binding, ['a','b'], ['a','b'])))
+            before = snapshot([path])
+            self.assertTrue(attestation_matches(path, binding, ['a','b']))
+            unchanged(before, [path], 'attestation')
+            changed = dict(binding, components={'a': {'adapter.log': 'c'*64}, 'b': {'adapter.log': 'b'*64}})
+            self.assertFalse(attestation_matches(path, changed, ['a','b']))
+
     def test_descendant_outbound_denied_and_localhost_allowed(self):
         self.assertEqual(network_probe()['outbound'], 'PASS: child socket denied by policy')
 
