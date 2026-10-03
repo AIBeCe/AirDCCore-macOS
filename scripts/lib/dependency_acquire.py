@@ -208,12 +208,16 @@ def inspect_archive(archive: Path, record: DependencyRecord) -> ArchivePlan:
     _regular(archive)
     if _sha(archive) != record.source.archive_sha256:
         raise AcquireError(f"{record.name}: archive checksum mismatch")
+    member_limit = 100000
+    if (record.name == "boost" and record.version == "1.90.0"
+            and record.source.archive_sha256 == "49551aff3b22cbc5c5a9ed3dbc92f0e23ea50a0f7325b0d198b705e8ee3fc305"):
+        member_limit = 103065
     members = []
     entries = []
     with tarfile.open(archive, "r:*") as stream:
         for member in stream:
-            if len(members) >= 100000:
-                raise AcquireError("archive exceeds 100000 member limit")
+            if len(members) >= member_limit:
+                raise AcquireError(f"archive exceeds {member_limit} member limit")
             path = normalize_member(member.name)
             if member.isdir():
                 kind = "directory"

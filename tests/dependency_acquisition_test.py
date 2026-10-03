@@ -125,6 +125,61 @@ class AcquisitionTests(unittest.TestCase):
         with self.assertRaisesRegex(self.a.AcquireError, "100000|member limit"):
             self.a.inspect_archive(archive, record)
 
+    def test_pinned_boost_member_limit_exception(self):
+        boost_sha256 = "49551aff3b22cbc5c5a9ed3dbc92f0e23ea50a0f7325b0d198b705e8ee3fc305"
+        archive, base_record = self.archive()
+        pinned = replace(base_record, name="boost", version="1.90.0",
+                         source=replace(base_record.source, archive_sha256=boost_sha256))
+
+        def synthetic_stream(count):
+            root = tarfile.TarInfo("pkg")
+            root.type = tarfile.DIRTYPE
+            yield root
+            for index in range(count - 1):
+                member = tarfile.TarInfo(f"pkg/file-{index}")
+                member.type = tarfile.REGTYPE
+                yield member
+
+        def inspect_with_member_count(record, count):
+            stream = synthetic_stream(count)
+            with patch.object(self.a, "_sha", return_value=boost_sha256), \
+                    patch.object(tarfile, "open", return_value=contextlib.nullcontext(stream)):
+                return self.a.inspect_archive(archive, record)
+
+        plan = inspect_with_member_count(pinned, 103065)
+        self.assertEqual(len(plan.members), 103065)
+        with self.assertRaisesRegex(self.a.AcquireError, "103065 member limit"):
+            inspect_with_member_count(pinned, 103066)
+
+    def test_boost_member_limit_exception_requires_exact_lock_identity(self):
+        boost_sha256 = "49551aff3b22cbc5c5a9ed3dbc92f0e23ea50a0f7325b0d198b705e8ee3fc305"
+        archive, base_record = self.archive()
+        pinned = replace(base_record, name="boost", version="1.90.0",
+                         source=replace(base_record.source, archive_sha256=boost_sha256))
+        non_pinned_records = (
+            replace(pinned, name="other"),
+            replace(pinned, version="1.90.1"),
+            replace(pinned, source=replace(pinned.source, archive_sha256="0" * 64)),
+        )
+        root = tarfile.TarInfo("pkg")
+        root.type = tarfile.DIRTYPE
+
+        def synthetic_stream():
+            yield root
+            for index in range(100000):
+                member = tarfile.TarInfo(f"pkg/file-{index}")
+                member.type = tarfile.REGTYPE
+                yield member
+
+        for record in non_pinned_records:
+            with self.subTest(name=record.name, version=record.version,
+                              sha256=record.source.archive_sha256):
+                # The synthetic archive represents verified input for this boundary test.
+                with patch.object(self.a, "_sha", return_value=record.source.archive_sha256), \
+                        patch.object(tarfile, "open", return_value=contextlib.nullcontext(synthetic_stream())):
+                    with self.assertRaisesRegex(self.a.AcquireError, "100000 member limit"):
+                        self.a.inspect_archive(archive, record)
+
     def test_safe_links_and_canonical_manifest(self):
         archive, record = self.archive([
             ("pkg/", None), ("pkg/LICENSE", b"license\n"),
