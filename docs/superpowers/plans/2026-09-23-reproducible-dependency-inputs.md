@@ -648,19 +648,21 @@
 - Consumes: all Task 1–9 commands and evidence plus the Phase 6 spec/ADR.
 - Produces: reviewed Gate 6 acceptance report, opt-in live gate, offline contract gate, and operator documentation. The implementation plan checkboxes become an execution record.
 
-- [ ] **Step 1: Write the failing Gate 6 contract test before the report exists.**
+- [x] **Step 1: Write the failing Gate 6 contract test before the report exists.**
 
   Require the report to name every exact version/commit/checksum, OpenSSL LTS exception, lock fingerprint, host/tool versions, prefix manifest/archive hashes, upstream/installed checks, Core archive hash, consumer runtime line, effective closure, system inputs, license paths, omissions/compensating tests, retry history, known limitations, and all twelve Gate 6 acceptance results. Assert `Dependencies`, `Build`, and `Dist` are untracked and `Dist`/aggregate remain absent.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk ./tests/gate6_contract_test.sh`
 
   Expected: FAIL because the report does not exist.
 
-- [ ] **Step 3: Implement the opt-in live build gate.**
+- [x] **Step 3: Implement the opt-in live build gate.**
 
   `tests/gate6_dependency_build_test.sh` skips unless `AIRDCCORE_RUN_DEPENDENCY_TESTS=1`. It must run lock validation, accepted-source validation, `scripts/build --build-dependencies`, a second no-op build with prefix fingerprint comparison, `--build-reproducible-core`, `--link-reproducible-consumer`, all prefix validators, closure comparison, Git-boundary checks, and report validation. It must fail if network is used after acquisition or if `Dist`/an aggregate appears.
+
+  Execution decision: the complete live process tree runs under the macOS outbound-denying sandbox with localhost permitted for OpenSSL TLS tests. Deterministic socket probes fail closed. Offline `--self-test` fixtures cover descendant confinement, prefix/evidence no-op guards, report identity/ADR/twelve-criterion refusal, and generated-path boundaries. Core/consumer snapshots exclude only their own output; freeze all other project writes and keep outer logs outside the project. Native acceptance/report steps remain pending.
 
 - [ ] **Step 4: Execute live acquisition and build gates and capture evidence.**
 
@@ -675,9 +677,11 @@
 
   Copy only normalized facts from ignored evidence. Do not copy absolute worktree/home paths, raw logs, timestamps that do not describe source identity, or mutable Homebrew library paths. Mark each acceptance criterion `PASS` with its evidence-relative path and hash. Record Snappy/LevelDB’s disabled upstream GoogleTest suites and their installed-consumer compensating checks.
 
-- [ ] **Step 6: Update operator and architecture documentation.**
+- [x] **Step 6: Update operator and architecture documentation.**
 
   Document the two update forms, three Phase 6 build modes, offline cache behavior, exact generated layout, host-tool versus library boundary, cleanup expectations, idempotent reruns, error/evidence locations, and explicit Phase 7 handoff. State clearly that Phase 6 still does not publish `Dist` or an aggregate archive.
+
+  `docs/upstream.md` was absent and is created for the acquisition contract. Acceptance is explicitly pending; documentation must only switch to accepted after native evidence and report checks pass.
 
 - [ ] **Step 7: Run the full offline Phase 1–6 regression suite.**
 
@@ -692,12 +696,13 @@
   rtk ./tests/build_configure_test.sh
   rtk ./tests/build_core_test.sh
   rtk python3 tests/archive_inspect_test.py
-  rtk ./tests/gate3_contract_test.sh
+  AIRDCCORE_RUN_BUILD_TESTS=1 rtk ./tests/gate3_contract_test.sh
   rtk ./tests/link_adapters_test.sh
   rtk ./tests/link_consumer_test.sh
   rtk ./tests/smoke_consumer_test.sh
   rtk python3 tests/link_evidence_test.py
-  rtk ./tests/gate4_contract_test.sh
+  AIRDCCORE_RUN_LINK_TESTS=1 rtk ./tests/gate4_contract_test.sh
+  # Run unchanged Gate 5 in a fresh tracked-only checkout (Dependencies absent).
   rtk ./tests/gate5_distribution_shape_test.sh
   rtk python3 tests/dependency_lock_test.py
   rtk python3 tests/dependency_acquisition_test.py
@@ -708,6 +713,7 @@
   rtk ./tests/dependency_boost_adapter_test.sh
   rtk ./tests/reproducible_core_test.sh
   rtk ./tests/reproducible_consumer_test.sh
+  rtk ./tests/gate6_contract_test.sh --self-test
   rtk ./tests/gate6_contract_test.sh
   rtk git diff --check
   rtk git status --short

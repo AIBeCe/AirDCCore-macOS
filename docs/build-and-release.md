@@ -2,7 +2,7 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-Acquisition, native configure-only discovery, an unpackaged ARM64 static Core build, external-consumer link discovery, and the distribution-shape decision are implemented. Pinned dependency builds, aggregation, packaging, and release workflows remain deferred.
+Acquisition, native configure-only discovery, an unpackaged ARM64 static Core build, external-consumer discovery, the distribution decision, and Phase 6 dependency/Core/consumer modes are implemented. Gate 6 native acceptance is pending; aggregation, packaging, and release remain deferred.
 
 ## Required sequence
 
@@ -71,6 +71,29 @@ Run the offline decision gate:
 The gate validates [ADR 0001](decisions/0001-aggregate-static-distribution.md): exact aggregate contents, explicit-versus-implicit SDK/system link modes, deterministic strong-collision-safe construction with classified weak/coalesced definitions, per-component provenance and licenses, rejected alternatives, and Phase 6 non-claims. It also verifies that source/build/distribution paths remain untracked and that neither `Dependencies` nor `Dist` exists or is a symlink.
 
 Hard stop: Gate 5 is documentation and contract evidence only. It does not download or build dependencies, create the aggregate, prove minimum-macOS compatibility, complete license review, package headers, or create `Dist`. Phase 6 starts with pinned reconstruction of the nine non-system components named by the ADR.
+
+## Gate 6 operator contract
+
+Use [both acquisition forms](upstream.md) to validate Core and acquire locked dependencies. `scripts/update --dependencies --offline` requires verified caches. Dependency builds refuse unaccepted source, run deterministic upstream/installed-consumer checks, validate isolated static prefixes, and preserve retries. Reuse requires matching lock/source/adapter/helper/SDK/tool/dependency-manifest fingerprints and accepted prefix/evidence hashes.
+
+```sh
+./scripts/build --build-dependencies
+./scripts/build --build-reproducible-core
+./scripts/build --link-reproducible-consumer
+AIRDCCORE_RUN_DEPENDENCY_TESTS=1 ./tests/gate6_dependency_build_test.sh
+./tests/gate6_contract_test.sh
+./tests/gate6_contract_test.sh --self-test
+```
+
+Generated layout is `Dependencies/.downloads` and `Dependencies/<name>` for caches/sources; `Build/dependencies/<name>` for private build/evidence/home/temp directories; `Build/prefix/<name>` for installs; `Build/airdcpp-core/reproducible-release` for Core; `Build/airdcpp-core/reproducible-link-interface` for consumer/omissions; and `Build/gate6` for normalized validation. Candidates are `reproducible-release/upstream/libairdcpp.a` and `reproducible-link-interface/full/airdcpp-smoke`. Component `evidence/adapter.log`, `exit-status.txt`, `error.txt` when present, `inputs.json`, and hash-bound `attempts` explain failures. Core/consumer commands/logs/statuses/resolution/inspection/history remain in their own outputs.
+
+Without its live variable the gate skips. It validates lock/accepted sources, two dependency builds and unchanged prefix/evidence comparison, every prefix, real Core/consumer, ADR closure, Git/output boundaries, and the tracked normalized report. It fails closed if `/usr/bin/sandbox-exec` is unavailable or the child socket probe does not prove outbound denial and localhost allowance. Its complete process tree uses `(version 1)(allow default)(deny network-outbound)(allow network-outbound (remote ip "localhost:*"))`, permitting OpenSSL localhost TLS tests while refusing remote sockets. Offline fixtures exercise descendant confinement, no-op enforcement, report identity/closure drift, twelve criteria, and generated-path refusal.
+
+Freeze every other project writer during real Core/consumer modes: their snapshots exclude only their own output. Changing documentation, Git state, sources, another output, or project-local logs violates scope. Save outer stdout/stderr outside the project in a private temporary path; copy durable evidence to ignored `Build/gate6` only between subprocesses or after execution. First capture without a tracked report refuses acceptance after preserving native evidence. Normalize facts, track the report, and rerun; fixtures and incomplete captures cannot establish PASS.
+
+Gate 3/4 copied-evidence tests require `AIRDCCORE_RUN_BUILD_TESTS=1` / `AIRDCCORE_RUN_LINK_TESTS=1`. Run unchanged Gate 5 in a fresh tracked-only checkout with `Dependencies` absent, preserving active artifacts. `scripts/clean` remains deferred; retain caches and attempt/history evidence, and remove only explicitly identified disposable fixtures.
+
+Phase 6 creates neither `Dist` nor an aggregate. After twelve criteria and independent review pass, Phase 7 owns the ADR aggregate algorithm, strong collisions, weak/coalesced classifications, member mapping, notices/provenance, packaging, and two-clean-build checks. Verification on the recorded host does not prove runtime behavior on an actual macOS 14 installation or release readiness.
 
 ## Release evidence
 

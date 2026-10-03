@@ -28,7 +28,7 @@ versioned pins + tracked patches
 
 ## Stable interface
 
-The stable user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Acquisition plus `scripts/build --configure-only`, `--build-core`, and `--link-consumer` are implemented. The distribution shape is decided; dependency reconstruction, aggregation, packaging, the final verification entry point, and cleaning remain deferred.
+The stable user-facing entry points are `scripts/update`, `scripts/build`, `scripts/verify`, and `scripts/clean`. Acquisition plus `scripts/build --configure-only`, `--build-core`, `--link-consumer`, `--build-dependencies`, `--build-reproducible-core`, and `--link-reproducible-consumer` are implemented. The distribution shape is decided; aggregation, packaging, the final verification entry point, and cleaning remain deferred.
 
 `Dist` is the only published output boundary. Consumers must not depend on `Build`, Homebrew paths, or the upstream checkout.
 
@@ -67,3 +67,11 @@ Phase 4 copies only validated headers and the exact archive into an ignored stag
 [ADR 0001](decisions/0001-aggregate-static-distribution.md) selects one future `Dist/lib/libairdcpp.a`. It will contain uniquely named objects from Core, BZip2, zlib, OpenSSL SSL/Crypto, miniupnpc, LevelDB, MaxMindDB, and Snappy. The public archive is accompanied by per-component provenance, checksum, member-mapping, and license metadata; flattening the link interface must not flatten attribution.
 
 SDK Iconv remains an explicit external consumer input; libc++ and libSystem remain implicit Apple toolchain load commands. Gate 4 measured no required Apple framework. `Dist` consumers may not discover Homebrew or link private component archives from `Build`. Phase 6 must reconstruct and validate the static component inputs before the deterministic aggregate construction contract can be implemented.
+
+## Phase 6 isolation and provenance
+
+The [Phase 6 spec](superpowers/specs/2026-09-23-reproducible-dependency-inputs-design.md) owns the lock and interfaces. `scripts/update --dependencies` validates canonical data and tracked patches before acquiring ignored `Dependencies`. Each adapter builds privately below `Build/dependencies/<name>` and atomically publishes one validated `Build/prefix/<name>`. Snappy precedes LevelDB; its accepted manifest enters the downstream fingerprint. Matching lock/source/adapter/helper/tool identities and prefix/evidence hashes make dependency builds unchanged no-ops. Retries preserve prior attempts.
+
+Core uses explicit roots and records imported-target resolution below `Build/airdcpp-core/reproducible-release`. The consumer stages validated headers/Core, force-loads all Core objects, measures omissions, and compares its physical static closure with ADR 0001 below `Build/airdcpp-core/reproducible-link-interface`. Boost remains build-only; any new physical Boost input or Apple framework blocks acceptance pending ADR review.
+
+The live gate confines its process tree with the macOS sandbox and proves outbound refusal before execution. Core/consumer snapshots exclude only their own output directory; every other project writer, including local log writers, must stop during execution. Raw evidence stays ignored; normalized facts and evidence-relative hashes enter the tracked report. Gate 6 acceptance remains pending until native evidence and report checks pass. Phase 7 still owns aggregation, symbol collision/coalescing analysis, member mapping, packaging, and two-clean-build reproducibility.

@@ -2,7 +2,7 @@
 
 AirDCCore-macOS is the source-acquisition, build, packaging, and verification project for a reproducible AirDC++ Core static distribution targeting macOS on Apple Silicon (`arm64`) only.
 
-Upstream acquisition, Phase 2 native configure-only discovery, the Phase 3 native `arm64` static Core build, Phase 4 external-consumer link discovery, and the Phase 5 distribution-shape decision are complete. The [accepted ADR](docs/decisions/0001-aggregate-static-distribution.md) selects one future aggregate `Dist/lib/libairdcpp.a`; no aggregate or distribution exists yet. Pinned dependency builds, packaging, and `Dist` remain outside the implemented workflow.
+Upstream acquisition, Phase 2 native configure-only discovery, the Phase 3 native `arm64` static Core build, Phase 4 external-consumer link discovery, and the Phase 5 distribution-shape decision are complete. Phase 6 implements locked dependency reconstruction, isolated static prefixes, and reproducible Core/consumer modes; Gate 6 acceptance is pending native verification and its evidence-backed report. The [accepted ADR](docs/decisions/0001-aggregate-static-distribution.md) selects one future aggregate `Dist/lib/libairdcpp.a`; aggregation, packaging, and `Dist` remain later work.
 
 The authoritative design is [docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md](docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md). Shorter operational summaries live in:
 
@@ -29,7 +29,7 @@ Parent-repository work follows full GitFlow. `develop` is the integration branch
 
 ## Upstream acquisition
 
-Run `./scripts/update` from any directory to acquire or validate the pinned AirDC++ Core checkout. The command reads `config/upstream.env`, accepts no arguments, and leaves a correct checkout detached at the exact configured commit.
+Run `./scripts/update` from any directory to acquire or validate the pinned AirDC++ Core checkout. The no-argument form reads `config/upstream.env` and leaves a correct checkout detached at the exact configured commit. `./scripts/update --dependencies` reconstructs the eight sources from `config/dependencies.lock`; add `--offline` to require verified caches. See [the acquisition contract](docs/upstream.md).
 
 The command refuses dirty, symlinked, non-Git, unignored, or wrong-origin destinations. A correct checkout is a no-op and does not contact the network. Run offline tests with `./tests/upstream_config_test.sh` and `./tests/update_test.sh`.
 
@@ -70,4 +70,17 @@ AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_consumer_link_test.sh
 ./tests/gate5_distribution_shape_test.sh
 ```
 
-Gate 5 is a tracked decision, not a packaging command. The accepted shape is one future aggregate `Dist/lib/libairdcpp.a` containing Core plus the pinned non-system static closure measured at Gate 4. macOS SDK Iconv, libc++, and libSystem remain external and machine-readable. The gate validates the ADR and verifies that `Dependencies` and `Dist` have not been created. Phase 6 must now reconstruct and validate every non-system ingredient before aggregation can begin.
+Gate 5 is a tracked decision, not a packaging command. The accepted shape is one future aggregate `Dist/lib/libairdcpp.a` containing Core plus the pinned non-system static closure measured at Gate 4. macOS SDK Iconv, libc++, and libSystem remain external and machine-readable. The unchanged Gate 5 test requires `Dependencies` absent; run it in a fresh tracked-only checkout once Phase 6 sources exist in the active checkout.
+
+## Reproducible dependency inputs (Phase 6)
+
+```sh
+./scripts/update
+./scripts/update --dependencies
+./scripts/build --build-dependencies
+./scripts/build --build-reproducible-core
+./scripts/build --link-reproducible-consumer
+AIRDCCORE_RUN_DEPENDENCY_TESTS=1 ./tests/gate6_dependency_build_test.sh
+```
+
+The eight prefixes live in `Build/prefix/<name>`. Core and its external consumer use those validated static inputs plus Apple SDK/system libraries. Homebrew supplies host tools. The live Gate 6 process and its descendants run under an outbound-network-denying macOS sandbox, with localhost allowed for upstream TLS tests. The gate checks the unchanged second dependency build, real Core/consumer, ADR closure, generated-path boundaries, and the tracked normalized report. Without its opt-in variable it skips. `./tests/gate6_contract_test.sh --self-test` runs disposable offline report and sandbox fixtures. See [the operator contract](docs/build-and-release.md) for freeze, logging, retry, and Phase 7 boundaries. Phase 6 creates neither `Dist` nor an aggregate archive.
