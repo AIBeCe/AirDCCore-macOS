@@ -3,6 +3,7 @@ set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 python3 - "$repo" <<'PY'
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -17,6 +18,37 @@ ADAPTER = ROOT / 'scripts/lib/dependencies/build_boost.sh'
 sys.path.insert(0, str(ROOT/'scripts/lib'))
 from dependency_lock import load_lock
 from dependency_prefix import PrefixError, validate_prefix
+
+# Exact pinned upstream hunk, independently retained as the adapter preimage.
+GENERATOR_HUNK = r'''        "get_filename_component(_BOOST_CMAKEDIR \"${CMAKE_CURRENT_LIST_DIR}/../\" REALPATH)"
+        : true ;
+
+    if [ path.is-rooted $(cmakedir) ]
+    {
+        local cmakedir-native = [ path-native-fwd $(cmakedir) ] ;
+
+        print.text
+
+            ""
+            "# If the computed and the original directories are symlink-equivalent, use original"
+            "if(EXISTS \"$(cmakedir-native)\")"
+            "  get_filename_component(_BOOST_CMAKEDIR_ORIGINAL \"$(cmakedir-native)\" REALPATH)"
+            "  if(_BOOST_CMAKEDIR STREQUAL _BOOST_CMAKEDIR_ORIGINAL)"
+            "    set(_BOOST_CMAKEDIR \"$(cmakedir-native)\")"
+            "  endif()"
+            "  unset(_BOOST_CMAKEDIR_ORIGINAL)"
+            "endif()"
+            ""
+            : true ;
+    }
+
+    get-dir "_BOOST_INCLUDEDIR" : $(includedir) ;
+
+    if $(library-type) = INTERFACE
+    {
+'''
+GENERATOR = 'tools/boost_install/boost-install.jam'
+PATCH_PATH = 'config/patches/boost-1.90.0-relocatable-cmake.patch'
 
 # Literal inventory observed from the pinned upstream install, independent of
 # the lock under test. The fixture retains the full build-only export closure.
@@ -55,6 +87,9 @@ import os, shutil, sys
 from pathlib import Path
 b = Path.cwd()
 assert b == Path(sys.argv[0]).resolve().parent, 'bootstrap cwd must be private build'
+generator = (b/'tools/boost_install/boost-install.jam').read_text()
+assert 'CMAKE_CURRENT_LIST_DIR' in generator
+assert 'symlink-equivalent' not in generator, 'relocation patch must precede bootstrap'
 prefix = os.environ['FIXTURE_STAGE']
 assert sys.argv[1:] == ['--prefix=' + prefix, '--with-libraries=regex,thread']
 if os.environ.get('FIXTURE_FAIL') == 'bootstrap': sys.exit(29)
@@ -168,12 +203,16 @@ endif()
         self.stage = self.root/'stage with space'; self.caller = self.root/'caller'
         for p in (self.source, self.build, self.stage, self.caller): p.mkdir()
         (self.source/'LICENSE_1_0.txt').write_text('fixture license\n')
+        generator = self.source/GENERATOR
+        generator.parent.mkdir(parents=True)
+        generator.write_text('# fixture padding\n' * 796 + GENERATOR_HUNK)
         for name, body in (('bootstrap.sh', BOOTSTRAP), ('fixture-b2', B2)):
             path = self.source/name; path.write_text(body); path.chmod(0o755)
         shutil.copytree(self.fixture, self.source/'installed')
         self.manifest = self.source_manifest()
         self.runlog = self.root/'runtime.log'
         self.env = {**os.environ, 'CXX': '/usr/bin/clang++', 'SOURCE_DATE_EPOCH': '1764771748',
+                    'PATCH': '/usr/bin/patch',
                     'FIXTURE_STAGE': str(self.stage), 'FIXTURE_RUN_LOG': str(self.runlog)}
 
     def source_manifest(self):
@@ -233,11 +272,20 @@ endif()
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         evidence = self.evidence(result)
         self.assertEqual([x['purpose'] for x in evidence if x['type']=='status'],
-                         ['bootstrap', 'build', 'consumer-configure', 'consumer-build', 'consumer-run'])
+                         ['patch', 'bootstrap', 'build', 'consumer-configure', 'consumer-build', 'consumer-run'])
         self.assertTrue(all(x['status']==0 for x in evidence if x['type']=='status'))
         self.assertEqual(list(self.caller.iterdir()), [])
         self.assertTrue((self.build/'project-config.jam').is_file())
         self.assertEqual(self.source_manifest(), self.manifest)
+        self.assertIn('symlink-equivalent', (self.source/GENERATOR).read_text())
+        self.assertNotIn('symlink-equivalent', (self.build/GENERATOR).read_text())
+        patch_command = next(x for x in evidence if x.get('purpose') == 'patch' and x['type'] == 'command')
+        self.assertEqual(patch_command['argv'], ['/usr/bin/patch', '--batch', '--forward', '--fuzz=0',
+                         '--no-backup-if-mismatch', str(self.build/GENERATOR), str(self.build/'.boost-relocation.patch')])
+        identity = next(x for x in evidence if x['type'] == 'patch-input')
+        snapshot = self.build/'.boost-relocation.patch'
+        self.assertEqual(identity['sha256'], hashlib.sha256(snapshot.read_bytes()).hexdigest())
+        self.assertEqual(snapshot.read_bytes(), (ROOT/PATCH_PATH).read_bytes())
         self.assertEqual(self.runlog.read_text(), 'regex\nregex\njoined\n')
         self.assertEqual((self.stage/'LICENSE_1_0.txt').read_text(), 'fixture license\n')
         consumer = self.build/'consumer-build'
@@ -269,6 +317,95 @@ endif()
                 if failure != 'shared': self.assertEqual(statuses[-1]['status'], result.returncode)
                 if failure != 'runtime': self.assertFalse(self.runlog.exists())
                 self.assertEqual(list(self.caller.iterdir()), [])
+
+    def test_context_mismatch_and_offset_refuse_before_bootstrap_without_source_writes(self):
+        original = (self.source/GENERATOR).read_text()
+        for content in (original.replace('path.is-rooted', 'path.changed'), '# offset\n' + original):
+            with self.subTest(content=content[:30]):
+                (self.source/GENERATOR).write_text(content)
+                before = self.source_manifest()
+                result = self.invoke()
+                self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+                self.assertIn('Boost patch preimage mismatch', result.stdout+result.stderr)
+                self.assertFalse((self.build/'project-config.jam').exists())
+                self.assertEqual(self.source_manifest(), before)
+
+    def private_adapter_project(self):
+        project = self.root/'adapter-project'
+        for relative in ('scripts/lib/dependencies/build_boost.sh', 'scripts/lib/dependencies/command_runner.py',
+                         'scripts/lib/dependency_lock.py', 'config/dependencies.lock', PATCH_PATH):
+            destination = project/relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT/relative, destination)
+        adapter = project/'scripts/lib/dependencies/build_boost.sh'; adapter.chmod(0o755)
+        subprocess.run(['git', 'init', '-q', str(project)], check=True)
+        subprocess.run(['git', '-C', str(project), 'add', PATCH_PATH], check=True)
+        return project, adapter
+
+    def test_missing_modified_or_unbound_patch_refuses_before_bootstrap(self):
+        project, adapter = self.private_adapter_project()
+        patch_file = project/PATCH_PATH; original = patch_file.read_bytes()
+        lock_file = project/'config/dependencies.lock'; original_lock = lock_file.read_bytes()
+        for mutation in ('missing', 'modified', 'unbound'):
+            with self.subTest(mutation=mutation):
+                patch_file.write_bytes(original); lock_file.write_bytes(original_lock)
+                if mutation == 'missing': patch_file.unlink()
+                elif mutation == 'modified': patch_file.write_bytes(original + b'# changed\n')
+                else:
+                    value = json.loads(original_lock)
+                    next(r for r in value['dependencies'] if r['name']=='boost')['patches'] = []
+                    lock_file.write_text(json.dumps(value, indent=2, sort_keys=True)+'\n')
+                result = self.invoke(adapter=adapter)
+                self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+                self.assertFalse((self.build/'project-config.jam').exists())
+                self.assertEqual(self.source_manifest(), self.manifest)
+
+    def test_patch_bytes_changed_after_lock_validation_are_rejected(self):
+        project, adapter = self.private_adapter_project()
+        body = adapter.read_text()
+        marker = "patch_path = 'config/patches/boost-1.90.0-relocatable-cmake.patch'"
+        self.assertIn(marker, body)
+        adapter.write_text(body.replace(marker, marker + "\n(project/patch_path).write_bytes(b'changed after lock validation\\n')"))
+        result = self.invoke(adapter=adapter)
+        self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('Boost patch sha256 mismatch', result.stdout+result.stderr)
+        self.assertFalse((self.build/'project-config.jam').exists())
+        self.assertEqual(self.source_manifest(), self.manifest)
+
+    def test_patch_tool_consumes_snapshot_when_repository_artifact_changes(self):
+        project, adapter = self.private_adapter_project()
+        original = (project/PATCH_PATH).read_bytes()
+        runner = project/'scripts/lib/dependencies/command_runner.py'
+        body = runner.read_text()
+        marker = 'completed = subprocess.run(argv)'
+        self.assertIn(marker, body)
+        runner.write_text(body.replace(marker,
+            "if purpose == 'patch':\n    from pathlib import Path\n    Path(" + repr(str(project/PATCH_PATH)) + ").write_bytes(b'changed before external patch\\n')\n" + marker))
+        result = self.invoke(adapter=adapter)
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertNotEqual((project/PATCH_PATH).read_bytes(), original)
+        self.assertEqual((self.build/'.boost-relocation.patch').read_bytes(), original)
+        self.assertEqual(self.source_manifest(), self.manifest)
+
+    def test_symlink_target_and_existing_snapshot_refuse_before_bootstrap(self):
+        generator = self.source/GENERATOR
+        saved = self.source/'original-generator.jam'
+        generator.rename(saved)
+        generator.symlink_to(saved)
+        before = self.source_manifest()
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('unsafe private Boost patch target', result.stdout+result.stderr)
+        self.assertFalse((self.build/'project-config.jam').exists())
+        self.assertEqual(self.source_manifest(), before)
+        generator.unlink(); saved.rename(generator)
+        (self.source/'.boost-relocation.patch').write_bytes(b'preexisting snapshot\n')
+        before = self.source_manifest()
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('FileExistsError', result.stdout+result.stderr)
+        self.assertFalse((self.build/'project-config.jam').exists())
+        self.assertEqual(self.source_manifest(), before)
 
     def test_consumer_semantic_mutations_fail(self):
         body = ADAPTER.read_text()

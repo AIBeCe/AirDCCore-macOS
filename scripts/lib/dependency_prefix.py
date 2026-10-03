@@ -336,7 +336,7 @@ def validate_prefix(record: DependencyRecord, prefix: Path,
     expected_archives = set(record.expected_archives)
     expected_metadata = set(record.expected_metadata)
     licenses = set(record.license_paths)
-    patterns = _leak_patterns(roots)
+    patterns = (*_leak_patterns(roots), os.fsencode(prefix))
     for path in prefix.rglob("*"):
         relative = path.relative_to(prefix).as_posix()
         mode = path.lstat().st_mode

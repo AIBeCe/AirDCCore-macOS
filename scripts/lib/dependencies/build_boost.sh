@@ -17,8 +17,55 @@ case "$jobs" in ''|*[!0-9]*|0) die 'JOBS must be a positive integer' ;; esac
 case "$epoch" in ''|*[!0-9]*) die 'EPOCH must be a nonnegative integer' ;; esac
 [ "${SOURCE_DATE_EPOCH:-}" = "$epoch" ] || die 'epoch disagrees with build environment'
 : "${CXX:?CXX is required}"
+: "${PATCH:?PATCH is required}"
+[ "$PATCH" = /usr/bin/patch ] || die 'PATCH must be the inventoried /usr/bin/patch'
 [ -f "$source/LICENSE_1_0.txt" ] || die 'missing Boost license'
 cp -R "$source/." "$build/"
+project=$(CDPATH= cd -- "$(dirname -- "$runner")/../../.." && pwd -P)
+# This is deliberately limited to the single reviewed Boost 1.90.0 generator
+# patch. Keep the immutable Source tree intact and bind the tool's input to the
+# bytes validated here, rather than reopening a mutable repository artifact.
+python3 - "$project" "$build" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+project, build = map(Path, sys.argv[1:])
+sys.path.insert(0, str(project/'scripts/lib'))
+from dependency_lock import load_lock
+
+record = next(r for r in load_lock(project/'config/dependencies.lock').dependencies if r.name == 'boost')
+patch_path = 'config/patches/boost-1.90.0-relocatable-cmake.patch'
+if record.version != '1.90.0' or len(record.patches) != 1 or record.patches[0].path != patch_path:
+    raise SystemExit('boost adapter: expected the sole reviewed Boost relocation patch')
+with os.fdopen(os.open(project/patch_path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+        raise SystemExit('boost adapter: unsafe Boost patch input')
+    raw = stream.read()
+digest = hashlib.sha256(raw).hexdigest()
+if digest != record.patches[0].sha256:
+    raise SystemExit('boost adapter: Boost patch sha256 mismatch')
+lines = raw.splitlines(keepends=True)
+headers = [b'--- a/tools/boost_install/boost-install.jam\n',
+           b'+++ b/tools/boost_install/boost-install.jam\n', b'@@ -800,19 +799,0 @@\n']
+if lines[:3] != headers or len(lines[3:]) != 19 or any(line[:1] != b'-' for line in lines[3:]):
+    raise SystemExit('boost adapter: unexpected Boost patch structure')
+target = build/'tools/boost_install/boost-install.jam'
+if target.resolve(strict=True) != target or not target.is_file():
+    raise SystemExit('boost adapter: unsafe private Boost patch target')
+preimage = b''.join(line[1:] for line in lines[3:])
+if b''.join(target.read_bytes().splitlines(keepends=True)[799:818]) != preimage:
+    raise SystemExit('boost adapter: Boost patch preimage mismatch')
+snapshot = build/'.boost-relocation.patch'
+with os.fdopen(os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400), 'wb') as stream:
+    stream.write(raw)
+print(json.dumps({'type': 'patch-input', 'path': patch_path, 'snapshot': str(snapshot), 'sha256': digest}), flush=True)
+PY
+run patch /usr/bin/patch --batch --forward --fuzz=0 --no-backup-if-mismatch \
+  "$build/tools/boost_install/boost-install.jam" "$build/.boost-relocation.patch"
 (
   cd "$build"
   run bootstrap "$build/bootstrap.sh" --prefix="$stage" --with-libraries=regex,thread

@@ -243,6 +243,19 @@ class DependencyLockTests(unittest.TestCase):
         ]
         self.assert_rejected(self.value, "patch")
 
+    def test_boost_binds_the_single_reviewed_relocation_patch(self):
+        records = json.loads(TRACKED_LOCK.read_bytes())["dependencies"]
+        boost = next(record for record in records if record["name"] == "boost")
+        patch = ROOT / "config/patches/boost-1.90.0-relocatable-cmake.patch"
+        self.assertTrue(patch.is_file())
+        self.assertEqual(boost["patches"], [{"path": patch.relative_to(ROOT).as_posix(),
+                                          "sha256": hashlib.sha256(patch.read_bytes()).hexdigest()}])
+
+    def test_missing_patch_is_rejected(self):
+        self.value["dependencies"][0]["patches"] = [
+            {"path": "config/patches/missing.patch", "sha256": ZERO_HASH}]
+        self.assert_rejected(self.value, "patch missing or unsafe")
+
     def test_matching_untracked_patch_is_rejected(self):
         project = Path(self.temp.name) / "project"
         validator = project / "scripts/lib/dependency_lock.py"

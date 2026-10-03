@@ -504,7 +504,12 @@
       ],
       "license_spdx": "BSL-1.0",
       "name": "boost",
-      "patches": [],
+      "patches": [
+        {
+          "path": "config/patches/boost-1.90.0-relocatable-cmake.patch",
+          "sha256": "8b499642cfb6feee4bb41ef2b9edd16c9c66250d7e5801bae113c223310f97d9"
+        }
+      ],
       "platform": {
         "architecture": "arm64",
         "build_type": "Release",

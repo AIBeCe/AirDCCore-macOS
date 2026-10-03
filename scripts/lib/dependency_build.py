@@ -31,7 +31,7 @@ class BuildError(RuntimeError):
 
 BUILD_ENVIRONMENT_KEYS = (
     "AR", "CC", "CXX", "HOME", "LANG", "LC_ALL",
-    "MACOSX_DEPLOYMENT_TARGET", "PATH", "RANLIB", "SDKROOT",
+    "MACOSX_DEPLOYMENT_TARGET", "PATCH", "PATH", "RANLIB", "SDKROOT",
     "SOURCE_DATE_EPOCH", "TMPDIR", "ZERO_AR_DATE",
 )
 
@@ -145,6 +145,8 @@ def resolve_tool_inventory() -> ToolInventory:
     developer_root = Path(_run_text((xcrun, "--show-toolchain-path"))).parent.parent
     host = {name: str(_trusted_host_tool(name, developer_root))
             for name in ("cmake", "ninja", "perl", "make")}
+    # Boost's one reviewed patch uses Apple's patch explicitly, independent of PATH.
+    host["patch"] = "/usr/bin/patch"
     if not Path(xcrun).is_file():
         raise BuildError("missing required Apple tool: xcrun")
     identities = {}
@@ -232,6 +234,7 @@ def _environment(record: DependencyRecord, paths: BuildPaths, tools: ToolInvento
         "MACOSX_DEPLOYMENT_TARGET": record.platform.deployment_target,
         "CC": apple["cc"], "CXX": apple["cxx"],
         "AR": apple["ar"], "RANLIB": apple["ranlib"],
+        "PATCH": host["patch"],
         "LC_ALL": "C", "LANG": "C",
     }
 

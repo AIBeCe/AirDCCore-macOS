@@ -146,6 +146,28 @@ class PrefixValidationTests(unittest.TestCase):
                                             tools=inventory)
         self.assertEqual(report.archives[0].architectures, ("arm64",))
 
+    def test_absolute_own_prefix_outside_forbidden_roots_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="airdc-own-prefix-", dir="/private/tmp") as directory:
+            installed = self.valid_prefix(Path(directory) / "installed")
+            (installed / "lib/pkgconfig/fixture.pc").write_text(
+                f"prefix={installed}\nName: fixture\nVersion: 1.0\nLibs: -L${{prefix}}/lib -lfixture\n")
+            with self.assertRaisesRegex(prefix.PrefixError, "path leakage"):
+                prefix.validate_prefix(record(), installed, self.roots)
+
+    def test_absolute_own_prefix_in_archive_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="airdc-own-archive-", dir="/private/tmp") as directory:
+            installed = self.valid_prefix(Path(directory) / "installed", embedded=str(Path(directory) / "installed"))
+            with self.assertRaisesRegex(prefix.PrefixError, "path leakage"):
+                prefix.validate_prefix(record(), installed, self.roots)
+
+    def test_own_prefix_check_preserves_every_caller_root_label(self):
+        self.valid_prefix()
+        (self.accepted / "lib/pkgconfig/fixture.pc").write_text(
+            "prefix=/private/tmp/caller-forbidden-root\nName: fixture\nVersion: 1.0\nLibs: -L${prefix}/lib -lfixture\n")
+        roots = {**self.roots, "installed-prefix": Path("/private/tmp/caller-forbidden-root")}
+        with self.assertRaisesRegex(prefix.PrefixError, "path leakage"):
+            prefix.validate_prefix(record(), self.accepted, roots)
+
     def test_strings_path_leak_adjacent_to_non_utf8_byte_is_rejected(self):
         self.valid_prefix()
         inspect_run = prefix._run
@@ -419,11 +441,21 @@ class ToolResolutionTests(unittest.TestCase):
 
     def test_real_inventory_records_version_for_each_resolved_tool(self):
         inventory = build.resolve_tool_inventory()
-        self.assertEqual(len(inventory.identities), 13)
+        self.assertEqual(len(inventory.identities), 14)
         for name, identity in inventory.identities.items():
             with self.subTest(name=name):
                 self.assertTrue(identity["version"])
                 self.assertEqual(len(identity["sha256"]), 64)
+
+    def test_patch_tool_is_explicit_apple_path_and_pinned_in_environment(self):
+        inventory = build.resolve_tool_inventory()
+        self.assertEqual(inventory.host["patch"], "/usr/bin/patch")
+        identity = inventory.identities["host.patch"]
+        self.assertEqual(identity["invocation_path"], "/usr/bin/patch")
+        self.assertEqual(identity["sha256"], hashlib.sha256(Path("/usr/bin/patch").read_bytes()).hexdigest())
+        self.assertIn("patch 2.0-12u11-Apple", identity["version"])
+        paths = build.BuildPaths(ROOT, ROOT, ROOT, ROOT, ROOT, ROOT, ROOT, ROOT)
+        self.assertEqual(build._environment(record(), paths, inventory)["PATCH"], "/usr/bin/patch")
 
     def test_same_executable_bytes_with_changed_version_output_changes_inventory(self):
         with tempfile.TemporaryDirectory(prefix="airdc-tool-version-") as directory:
@@ -479,7 +511,7 @@ class OrchestrationTests(unittest.TestCase):
                 "lipo": "/usr/bin/lipo", "nm": "/usr/bin/nm",
                 "otool": "/usr/bin/otool", "strings": "/usr/bin/strings",
             }, host={"cmake": "/opt/homebrew/bin/cmake", "ninja": "/opt/homebrew/bin/ninja",
-                     "perl": "/usr/bin/perl", "make": "/usr/bin/make"})
+                     "perl": "/usr/bin/perl", "make": "/usr/bin/make", "patch": "/usr/bin/patch"})
 
     def write_adapter(self, name, extra=""):
         path = self.project / f"scripts/lib/dependencies/build_{name}.sh"
