@@ -14,6 +14,40 @@ import unittest
 
 ROOT = Path(sys.argv[1])
 ADAPTER = ROOT / 'scripts/lib/dependencies/build_boost.sh'
+sys.path.insert(0, str(ROOT/'scripts/lib'))
+from dependency_lock import load_lock
+from dependency_prefix import PrefixError, validate_prefix
+
+# Literal inventory observed from the pinned upstream install, independent of
+# the lock under test. The fixture retains the full build-only export closure.
+ARCHIVE_COMPONENTS = ('atomic', 'chrono', 'container', 'date_time', 'exception', 'regex', 'thread')
+METADATA = (
+    'Boost-1.90.0/BoostConfig.cmake',
+    'Boost-1.90.0/BoostConfigVersion.cmake',
+    'BoostDetectToolset-1.90.0.cmake',
+    'boost_atomic-1.90.0/boost_atomic-config-version.cmake',
+    'boost_atomic-1.90.0/boost_atomic-config.cmake',
+    'boost_atomic-1.90.0/libboost_atomic-variant-static.cmake',
+    'boost_chrono-1.90.0/boost_chrono-config-version.cmake',
+    'boost_chrono-1.90.0/boost_chrono-config.cmake',
+    'boost_chrono-1.90.0/libboost_chrono-variant-static.cmake',
+    'boost_container-1.90.0/boost_container-config-version.cmake',
+    'boost_container-1.90.0/boost_container-config.cmake',
+    'boost_container-1.90.0/libboost_container-variant-static.cmake',
+    'boost_date_time-1.90.0/boost_date_time-config-version.cmake',
+    'boost_date_time-1.90.0/boost_date_time-config.cmake',
+    'boost_date_time-1.90.0/libboost_date_time-variant-static.cmake',
+    'boost_exception-1.90.0/boost_exception-config-version.cmake',
+    'boost_exception-1.90.0/boost_exception-config.cmake',
+    'boost_headers-1.90.0/boost_headers-config-version.cmake',
+    'boost_headers-1.90.0/boost_headers-config.cmake',
+    'boost_regex-1.90.0/boost_regex-config-version.cmake',
+    'boost_regex-1.90.0/boost_regex-config.cmake',
+    'boost_regex-1.90.0/libboost_regex-variant-static.cmake',
+    'boost_thread-1.90.0/boost_thread-config-version.cmake',
+    'boost_thread-1.90.0/boost_thread-config.cmake',
+    'boost_thread-1.90.0/libboost_thread-variant-static.cmake',
+)
 # Only the expensive upstream bootstrap/install boundary is doubled. The fixture
 # libraries, CMake package lookup, compiler, linker and consumer execution are real.
 BOOTSTRAP = r'''#!/usr/bin/env python3
@@ -101,14 +135,19 @@ extern "C" int fixture_atomic();
 void boost::thread::join() { if (fixture_atomic() != 1) std::abort(); value.join();
 std::ofstream(std::getenv("FIXTURE_RUN_LOG"), std::ios::app) << "joined\\n"; }
 '''}
-        for name, body in bodies.items():
+        for name in ARCHIVE_COMPONENTS:
+            body = bodies.get(name, 'int fixture_'+name+'() { return 1; }\n')
             src = Path(cls.native.name)/(name+'.cc'); src.write_text(body)
             obj = src.with_suffix('.o')
             subprocess.run(['/usr/bin/clang++', '-std=c++17', '-arch', 'arm64',
                             '-mmacosx-version-min=14.0', '-I'+str(include.parent),
                             '-c', str(src), '-o', str(obj)], check=True, capture_output=True)
             subprocess.run(['/usr/bin/ar', 'rcs', str(lib/('libboost_'+name+'.a')), str(obj)], check=True)
-        config = lib/'cmake/Boost-1.90.0'; config.mkdir(parents=True)
+        for name in METADATA:
+            path = lib/'cmake'/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('# fixture installed export\n')
+        config = lib/'cmake/Boost-1.90.0'
         (config/'BoostConfig.cmake').write_text(CONFIG)
         (config/'BoostConfigVersion.cmake').write_text('''set(PACKAGE_VERSION "1.90.0")
 if(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)
@@ -153,6 +192,41 @@ endif()
 
     def evidence(self, result):
         return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+
+    def validate_installed(self):
+        record = next(r for r in load_lock(ROOT/'config/dependencies.lock').dependencies if r.name=='boost')
+        return validate_prefix(record, self.stage, {'project': ROOT, 'source': self.source,
+                                                    'build': self.build, 'home': self.root/'home',
+                                                    'fixture': Path(self.native.name)})
+
+    def test_full_build_only_inventory_passes_strict_prefix_validation(self):
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        try:
+            report = self.validate_installed()
+        except PrefixError as error:
+            self.fail('installed build-only inventory rejected: '+str(error))
+        self.assertEqual(report.role, 'build-only')
+        self.assertEqual(tuple(a.path for a in report.archives),
+                         tuple('lib/libboost_'+name+'.a' for name in ARCHIVE_COMPONENTS))
+        self.assertTrue(all(a.architectures==('arm64',) for a in report.archives))
+        self.assertTrue(all('minos 14.0' in a.build_versions for a in report.archives))
+
+    def test_undeclared_archives_and_metadata_remain_rejected(self):
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        try:
+            self.validate_installed()
+        except PrefixError as error:
+            self.fail('installed build-only inventory rejected: '+str(error))
+        for relative in ('lib/libboost_unexpected.a', 'lib/cmake/unexpected-config.cmake'):
+            with self.subTest(output=relative):
+                path = self.stage/relative
+                if path.suffix=='.a': shutil.copyfile(self.stage/'lib/libboost_regex.a', path)
+                else: path.write_text('# undeclared export\n')
+                with self.assertRaisesRegex(PrefixError, 'foreign library file'):
+                    self.validate_installed()
+                path.unlink()
 
     def test_native_installed_targets_and_private_bootstrap(self):
         result = self.invoke()

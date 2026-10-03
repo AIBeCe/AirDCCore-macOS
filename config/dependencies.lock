@@ -446,6 +446,11 @@
       ],
       "dependencies": [],
       "expected_archives": [
+        "lib/libboost_atomic.a",
+        "lib/libboost_chrono.a",
+        "lib/libboost_container.a",
+        "lib/libboost_date_time.a",
+        "lib/libboost_exception.a",
         "lib/libboost_regex.a",
         "lib/libboost_thread.a"
       ],
@@ -454,7 +459,31 @@
         "include/boost/thread.hpp"
       ],
       "expected_metadata": [
-        "lib/cmake/Boost-1.90.0/BoostConfig.cmake"
+        "lib/cmake/Boost-1.90.0/BoostConfig.cmake",
+        "lib/cmake/Boost-1.90.0/BoostConfigVersion.cmake",
+        "lib/cmake/BoostDetectToolset-1.90.0.cmake",
+        "lib/cmake/boost_atomic-1.90.0/boost_atomic-config-version.cmake",
+        "lib/cmake/boost_atomic-1.90.0/boost_atomic-config.cmake",
+        "lib/cmake/boost_atomic-1.90.0/libboost_atomic-variant-static.cmake",
+        "lib/cmake/boost_chrono-1.90.0/boost_chrono-config-version.cmake",
+        "lib/cmake/boost_chrono-1.90.0/boost_chrono-config.cmake",
+        "lib/cmake/boost_chrono-1.90.0/libboost_chrono-variant-static.cmake",
+        "lib/cmake/boost_container-1.90.0/boost_container-config-version.cmake",
+        "lib/cmake/boost_container-1.90.0/boost_container-config.cmake",
+        "lib/cmake/boost_container-1.90.0/libboost_container-variant-static.cmake",
+        "lib/cmake/boost_date_time-1.90.0/boost_date_time-config-version.cmake",
+        "lib/cmake/boost_date_time-1.90.0/boost_date_time-config.cmake",
+        "lib/cmake/boost_date_time-1.90.0/libboost_date_time-variant-static.cmake",
+        "lib/cmake/boost_exception-1.90.0/boost_exception-config-version.cmake",
+        "lib/cmake/boost_exception-1.90.0/boost_exception-config.cmake",
+        "lib/cmake/boost_headers-1.90.0/boost_headers-config-version.cmake",
+        "lib/cmake/boost_headers-1.90.0/boost_headers-config.cmake",
+        "lib/cmake/boost_regex-1.90.0/boost_regex-config-version.cmake",
+        "lib/cmake/boost_regex-1.90.0/boost_regex-config.cmake",
+        "lib/cmake/boost_regex-1.90.0/libboost_regex-variant-static.cmake",
+        "lib/cmake/boost_thread-1.90.0/boost_thread-config-version.cmake",
+        "lib/cmake/boost_thread-1.90.0/boost_thread-config.cmake",
+        "lib/cmake/boost_thread-1.90.0/libboost_thread-variant-static.cmake"
       ],
       "forbidden_globs": [
         "**/*.dylib",
