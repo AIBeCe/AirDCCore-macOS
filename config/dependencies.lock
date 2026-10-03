@@ -112,7 +112,10 @@
     {
       "adapter": "openssl",
       "build_options": [
-        "-j@JOBS@"
+        "-j@JOBS@",
+        "OPENSSLDIR=/usr/local/ssl",
+        "ENGINESDIR=/usr/local/lib/engines-3",
+        "MODULESDIR=/usr/local/lib/ossl-modules"
       ],
       "configure_options": [
         "darwin64-arm64-cc",
@@ -120,8 +123,7 @@
         "no-pinshared",
         "--prefix=@STAGE@",
         "--openssldir=@STAGE@/ssl",
-        "-arch",
-        "arm64",
+        "-arch arm64",
         "-mmacosx-version-min=14.0"
       ],
       "dependencies": [],
@@ -134,7 +136,11 @@
         "include/openssl/crypto.h"
       ],
       "expected_metadata": [
-        "lib/pkgconfig/openssl.pc"
+        "lib/pkgconfig/openssl.pc",
+        "lib/pkgconfig/libcrypto.pc",
+        "lib/pkgconfig/libssl.pc",
+        "lib/cmake/OpenSSL/OpenSSLConfig.cmake",
+        "lib/cmake/OpenSSL/OpenSSLConfigVersion.cmake"
       ],
       "forbidden_globs": [
         "**/*.dylib",
@@ -143,7 +149,10 @@
         "**/*.la"
       ],
       "install_options": [
-        "install_dev"
+        "install_dev",
+        "OPENSSLDIR=/usr/local/ssl",
+        "ENGINESDIR=/usr/local/lib/engines-3",
+        "MODULESDIR=/usr/local/lib/ossl-modules"
       ],
       "license_paths": [
         "LICENSE.txt"
@@ -194,6 +203,9 @@
       ],
       "expected_metadata": [
         "lib/cmake/miniupnpc/miniupnpc-config.cmake",
+        "lib/cmake/miniupnpc/miniupnpc-private.cmake",
+        "lib/cmake/miniupnpc/libminiupnpc-static.cmake",
+        "lib/cmake/miniupnpc/libminiupnpc-static-release.cmake",
         "lib/pkgconfig/miniupnpc.pc"
       ],
       "forbidden_globs": [
@@ -252,6 +264,7 @@
       ],
       "expected_metadata": [
         "lib/cmake/maxminddb/maxminddb-config.cmake",
+        "lib/cmake/maxminddb/maxminddb-config-release.cmake",
         "lib/pkgconfig/libmaxminddb.pc"
       ],
       "forbidden_globs": [
@@ -358,7 +371,16 @@
         "-DLEVELDB_BUILD_TESTS=OFF",
         "-DLEVELDB_BUILD_BENCHMARKS=OFF",
         "-DLEVELDB_INSTALL=ON",
-        "-DCMAKE_PREFIX_PATH=@PREFIX:snappy@"
+        "-DCMAKE_PREFIX_PATH=@PREFIX:snappy@",
+        "-DCMAKE_PROJECT_INCLUDE=@BUILD@/locked-snappy.cmake",
+        "-DCMAKE_REQUIRED_FLAGS=-L@PREFIX:snappy@/lib",
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON",
+        "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF",
+        "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF",
+        "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
       ],
       "dependencies": [
         "snappy"
