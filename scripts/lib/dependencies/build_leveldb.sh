@@ -26,6 +26,101 @@ if not seen:
     raise SystemExit('leveldb adapter: generated link commands lack locked Snappy archive')
 PY
 }
+verify_host_provenance() {
+  python3 - "$1" "$2" "$3" "$4" "$5" "$cmake_tool" "$ninja" <<'PY'
+import json
+from pathlib import Path
+import shlex
+import sys
+
+compile_file, command_file, build_dir, target, purpose, cmake, ninja = sys.argv[1:]
+selected_tools = {Path(tool).resolve(strict=True) for tool in (cmake, ninja)}
+
+def reject(message):
+    raise SystemExit('leveldb adapter: host provenance: ' + message)
+
+def is_host_path(value):
+    return '/opt/homebrew' in value or '/usr/local' in value
+
+def selected_tool(value):
+    try:
+        return Path(value).is_absolute() and Path(value).resolve(strict=True) in selected_tools
+    except (OSError, RuntimeError):
+        return False
+
+def check_argv(argv):
+    if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv):
+        reject('malformed command arguments')
+    executable_position = True
+    for argument in argv:
+        if is_host_path(argument) and not (executable_position and selected_tool(argument)):
+            reject('foreign compile/link input: ' + argument)
+        executable_position = False
+
+def check_command(command):
+    if not isinstance(command, str) or not command:
+        reject('malformed shell command')
+    # Split executable positions before shlex removes quoting. A quoted or
+    # escaped semicolon is data, not a shell separator granting a tool exception.
+    quote = None
+    escaped = False
+    start = 0
+    segments = []
+    for index, character in enumerate(command):
+        if escaped:
+            escaped = False
+            continue
+        if character == '\\' and quote != "'":
+            escaped = True
+        elif quote is not None:
+            if character == quote:
+                quote = None
+        elif character in ("'", '"'):
+            quote = character
+        elif character in ';&|()':
+            segments.append(command[start:index])
+            start = index + 1
+    segments.append(command[start:])
+    for segment in segments:
+        if segment.strip():
+            check_argv(shlex.split(segment))
+
+if compile_file != '-':
+    entries = json.loads(Path(compile_file).read_text())
+    if not isinstance(entries, list) or not entries:
+        reject('malformed compile command database')
+    for entry in entries:
+        if not isinstance(entry, dict) or not {'file', 'directory'} <= entry.keys():
+            reject('malformed compile command entry')
+        for key in ('file', 'directory', 'output'):
+            if key in entry and (not isinstance(entry[key], str) or is_host_path(entry[key])):
+                reject('foreign compile command data: ' + key)
+        if 'arguments' not in entry and 'command' not in entry:
+            reject('missing compile command')
+        if 'arguments' in entry:
+            check_argv(entry['arguments'])
+        if 'command' in entry:
+            check_command(entry['command'])
+
+for line in Path(command_file).read_text().splitlines():
+    if not line.strip():
+        continue
+    if line.startswith('{'):
+        entry = json.loads(line)
+        if entry.get('type') == 'command':
+            if (set(entry) != {'type', 'purpose', 'argv'} or entry['purpose'] != purpose
+                    or entry['argv'] != [ninja, '-C', build_dir, '-t', 'commands', target]):
+                reject('unexpected command-runner metadata')
+        elif entry.get('type') == 'status':
+            if (set(entry) != {'type', 'purpose', 'status'} or entry['purpose'] != purpose
+                    or type(entry['status']) is not int or entry['status'] != 0):
+                reject('unexpected command-runner status')
+        else:
+            reject('unknown command-runner metadata')
+        continue
+    check_command(line)
+PY
+}
 [ "$#" -eq 6 ] || die 'expected SOURCE BUILD STAGE JOBS EPOCH SNAPPY_PREFIX'
 source=$1; build=$2; stage=$3; jobs=$4; epoch=$5; snappy=$6; [ -n "$snappy" ] || die 'SNAPPY_PREFIX must not be empty'
 for path in "$source" "$build" "$stage" "$snappy"; do [ -d "$path" ] && [ ! -L "$path" ] || die "missing or unsafe directory: $path"; case "$path" in /*) ;; *) die "path must be absolute: $path" ;; esac; done
@@ -36,6 +131,7 @@ case "$jobs" in ''|*[!0-9]*|0) die 'JOBS must be a positive integer' ;; esac; ca
 [ -f "$snappy/include/snappy.h" ] && [ -f "$snappy/lib/libsnappy.a" ] || die 'invalid Snappy prefix'
 unset CMAKE_PREFIX_PATH PKG_CONFIG_PATH PKG_CONFIG_LIBDIR CMAKE_INCLUDE_PATH CMAKE_LIBRARY_PATH CMAKE_FRAMEWORK_PATH CMAKE_APPBUNDLE_PATH CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 ninja=$(command -v ninja) || die 'Ninja is required'
+cmake_tool=$(command -v cmake) || die 'CMake is required'
 # The pinned upstream probes and links the bare target "snappy". Bind that
 # target before its checks, without changing source or bypassing the probe.
 cat > "$build/locked-snappy.cmake" <<CMAKE
@@ -60,9 +156,7 @@ verify_snappy_links "$probe_log"
 config_dir="$stage/lib/cmake/leveldb"
 [ -f "$config_dir/leveldbConfig.cmake" ] || die 'missing installed LevelDB config'
 grep -Fx '  INTERFACE_LINK_LIBRARIES "snappy;Threads::Threads"' "$config_dir/leveldbTargets.cmake" >/dev/null || die 'installed target has unexpected dependency interface'
-for poison in /opt/homebrew /usr/local; do
-  ! grep -F "$poison" "$build/compile_commands.json" "$build/leveldb-link-commands.txt" >/dev/null || die 'host provenance leaked into LevelDB'
-done
+verify_host_provenance "$build/compile_commands.json" "$build/leveldb-link-commands.txt" "$build" leveldbutil link-provenance
 # Exported metadata remains relocatable; the build-owned hook supplies the
 # upstream bare dependency to the isolated installed consumer below.
 for poison in "$source" "$build" "$stage" "$snappy" /opt/homebrew /usr/local; do
@@ -116,7 +210,7 @@ run consumer-link-provenance "$ninja" -C "$build/consumer" -t commands leveldb-c
 cat "$build/consumer-link-commands.txt"
 verify_snappy_links "$build/consumer-link-commands.txt"
 grep -F "$stage/lib/libleveldb.a" "$build/consumer-link-commands.txt" >/dev/null || die 'installed consumer does not link staged LevelDB'
-for poison in /opt/homebrew /usr/local; do ! grep -F "$poison" "$build/consumer-link-commands.txt" >/dev/null || die 'host consumer link provenance'; done
+verify_host_provenance - "$build/consumer-link-commands.txt" "$build/consumer" leveldb-consumer consumer-link-provenance
 db_path=$(mktemp -d "$build/leveldb-consumer-db.XXXXXX")
 trap 'rm -rf "$db_path"' EXIT HUP INT TERM
 run consumer-run "$build/consumer/leveldb-consumer" "$db_path"

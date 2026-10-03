@@ -19,7 +19,7 @@ order = [item.name for item in topological_records(load_lock(root / 'config/depe
 assert order.index('snappy') < order.index('leveldb')
 
 fake = r'''
-import json, os, sys
+import json, os, shlex, sys
 from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ['FIXTURE_LOG'], 'a') as stream:
@@ -31,7 +31,14 @@ if Path(sys.argv[0]).name == 'ninja':
     wrong = poison == 'link' and state['kind'] == 'leveldb' or poison == 'consumer-link' and state['kind'] == 'consumer'
     archive = '/opt/homebrew/lib/libsnappy.a' if wrong else state['snappy'] + '/lib/libsnappy.a'
     if poison == 'foreign-link': archive += ' /outside/ambient/libsnappy.a'
-    print('/usr/bin/clang++ object.o ' + archive + (' ' + state['stage'] + '/lib/libleveldb.a' if state['kind'] == 'consumer' else '') + ' -o ' + args[-1])
+    cmake_tool = str(Path(sys.argv[0]).with_name('cmake'))
+    alias = str(Path(cmake_tool).with_name('cmake-alias'))
+    print(': && ' + shlex.quote(cmake_tool) + ' -E rm -f fixture.a && /usr/bin/ar qc fixture.a object.o && ' + shlex.quote(alias) + ' -E touch fixture.a && :')
+    if poison == 'foreign-tool': print(': && /opt/homebrew/bin/cmake -E touch foreign.a && :')
+    if poison == 'runner-metadata': print(json.dumps({'type': 'command', 'purpose': 'link-provenance', 'argv': ['/opt/homebrew/bin/ninja', '-C', str(build), '-t', 'commands', args[-1]]}))
+    data = ' ' + shlex.quote(cmake_tool) if poison == 'tool-data' else ' -Wl,-rpath,/opt/homebrew/lib' if poison == 'rpath' else ' -include ' + shlex.quote(cmake_tool) if poison == 'split-include' else ''
+    if poison == 'quoted-separator': data = " ';' " + shlex.quote(cmake_tool)
+    print('/usr/bin/clang++ object.o ' + archive + (' ' + state['stage'] + '/lib/libleveldb.a' if state['kind'] == 'consumer' else '') + data + ' -o ' + args[-1])
     sys.exit(0)
 def opt(name): return next((arg.split('=', 1)[1] for arg in args if arg.startswith('-D' + name + '=')), '')
 if '--build' in args:
@@ -90,15 +97,20 @@ else:
     (build / 'resolved-targets.txt').write_text('/opt/homebrew/lib/libsnappy.a\n' if poison == 'target' else resolved)
 (build / 'state.json').write_text(json.dumps({'kind': kind, 'stage': stage, 'snappy': snappy}))
 (build / 'CMakeCache.txt').write_text('CMAKE_PREFIX_PATH:PATH=' + ('/opt/homebrew/opt/snappy' if poison == 'cache' else prefix) + '\nHAVE_SNAPPY:INTERNAL=' + ('0' if poison == 'probe' else '1') + '\n')
-(build / 'compile_commands.json').write_text('/opt/homebrew/include' if poison == 'compile' else snappy + '/include')
+entry = {'directory': str(build), 'file': str(source / 'fixture.cc'), 'arguments': ['/usr/bin/clang++', '-I', snappy + '/include', '-c', 'fixture.cc'], 'command': '/usr/bin/clang++ -I' + shlex.quote('/opt/homebrew/include' if poison == 'compile' else snappy + '/include') + (' -L/opt/homebrew/lib' if poison == 'compile-library' else '') + ' -c fixture.cc'}
+if poison == 'compile-arguments':
+    entry.pop('command')
+    entry['arguments'] = ['/usr/bin/clang++', '-include', str(Path(sys.argv[0]))]
+(build / 'compile_commands.json').write_text(json.dumps([entry]))
 (build / 'CMakeFiles').mkdir(exist_ok=True)
 (build / 'CMakeFiles/CMakeConfigureLog.yaml').write_text('Run Build Command(s): /opt/homebrew/bin/ninja -v\n' + ('snappy_compress /opt/homebrew/lib/libsnappy.a\n' if poison == 'probe-link' else 'snappy_compress ' + snappy + '/lib/libsnappy.a\n'))
 '''
 
 with tempfile.TemporaryDirectory(prefix='leveldb-chain-') as directory:
-    work = Path(directory).resolve(); fakebin = work / 'fakebin'; fakebin.mkdir()
+    work = Path(directory).resolve(); fakebin = work / 'opt/homebrew/tool paths/bin'; fakebin.mkdir(parents=True)
     for name in ('cmake', 'ninja'):
         path = fakebin / name; path.write_text('#!' + sys.executable + '\n' + fake); path.chmod(0o755)
+    (fakebin / 'cmake-alias').symlink_to('cmake')
     for name in ('snappy', 'leveldb'):
         source = work / (name + '-src'); source.mkdir()
         (source / 'CMakeLists.txt').touch(); (source / ('COPYING' if name == 'snappy' else 'LICENSE')).touch()
@@ -119,7 +131,7 @@ with tempfile.TemporaryDirectory(prefix='leveldb-chain-') as directory:
     runs = [json.loads(line) for line in (work / 'runs.jsonl').read_text().splitlines()]
     assert Path(runs[0][0]).name == 'snappy-consumer'
     db = Path(runs[1][1]); assert db.parent == build and not db.exists()
-    poisons = ('cache', 'link', 'foreign-link', 'compile', 'config', 'interface', 'probe', 'probe-link', 'target', 'consumer-link', 'runtime')
+    poisons = ('cache', 'link', 'foreign-link', 'compile', 'config', 'interface', 'probe', 'probe-link', 'target', 'consumer-link', 'runtime', 'tool-data', 'rpath', 'split-include', 'compile-arguments', 'compile-library', 'foreign-tool', 'runner-metadata', 'quoted-separator')
     for poison in poisons:
         result, build = invoke('leveldb', '-' + poison, poison)
         assert result.returncode != 0, 'accepted injected ' + poison
@@ -131,7 +143,7 @@ with tempfile.TemporaryDirectory(prefix='leveldb-chain-') as directory:
     # target export, and link semantics without claiming a live dependency build.
     cmake = shutil.which('cmake'); ninja = shutil.which('ninja')
     assert cmake and ninja, 'CMake and Ninja are required for the real probe fixture'
-    probe = work / 'probe'; probe.mkdir()
+    probe = work / 'probe with spaces'; probe.mkdir()
     (probe / 'snappy.cc').write_text('#include <string>\nextern "C" int snappy_compress(void) { std::string value("fixture"); return value == "fixture" ? 0 : 1; }\n')
     subprocess.run(['/usr/bin/clang++', '-arch', 'arm64', '-mmacosx-version-min=14.0', '-c', str(probe / 'snappy.cc'), '-o', str(probe / 'snappy.o')], check=True, capture_output=True)
     archive = work / 'snappy-stage/lib/libsnappy.a'; archive.unlink()
@@ -199,5 +211,5 @@ file(GENERATE OUTPUT resolved.txt CONTENT "$<TARGET_FILE:Snappy::snappy>\\n")
     broken = configure.copy(); broken[broken.index('-B') + 1] = str(work / 'broken-downstream')
     result = subprocess.run(broken, env=clean_env, capture_output=True, text=True)
     assert result.returncode != 0 and 'Snappy::snappy' in result.stderr
-print('PASS: locked argv/order, 2 installed consumer paths, 11 provenance/runtime rejection cases, database cleanup, real CMake probe/export/installed package link and broken target fixture')
+print('PASS: locked argv/order, 2 installed consumer paths, 19 provenance/runtime rejection cases, quoted tool/data paths and separators, symlink identity, database cleanup, real CMake probe/export/installed package link and broken target fixture')
 PY
