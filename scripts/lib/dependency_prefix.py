@@ -82,7 +82,8 @@ def tree_digest(root: Path) -> str:
 
 def _run(argv, *, cwd=None, purpose="tool") -> str:
     result = subprocess.run([str(item) for item in argv], cwd=cwd, capture_output=True,
-                            text=True, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                            text=True, encoding="utf-8", errors="backslashreplace",
+                            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                                             "LC_ALL": "C", "LANG": "C"})
     if result.returncode:
         raise PrefixError(f"{purpose} failed")

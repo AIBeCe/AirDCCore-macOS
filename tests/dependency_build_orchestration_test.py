@@ -85,6 +85,13 @@ def make_archive(destination: Path, architecture="arm64", embedded="clean",
     obj.unlink()
 
 
+class InspectionOutputTests(unittest.TestCase):
+    def test_run_preserves_non_utf8_output_as_byte_escapes(self):
+        output = prefix._run((sys.executable, "-c",
+                              "import os; os.write(1, b'clean\\xf0\\n'); os.write(2, b'\\xff')"))
+        self.assertEqual(output, "clean\\xf0\n")
+
+
 class PrefixValidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -138,6 +145,20 @@ class PrefixValidationTests(unittest.TestCase):
             report = prefix.validate_prefix(record(), self.accepted, self.roots,
                                             tools=inventory)
         self.assertEqual(report.archives[0].architectures, ("arm64",))
+
+    def test_strings_path_leak_adjacent_to_non_utf8_byte_is_rejected(self):
+        self.valid_prefix()
+        inspect_run = prefix._run
+
+        def output_with_leak(argv, **kwargs):
+            if kwargs.get("purpose", "").startswith("strings "):
+                return inspect_run((sys.executable, "-c",
+                                    "import os; os.write(1, b'\\xf0/opt/homebrew/lib/forbidden\\xff')"))
+            return inspect_run(argv, **kwargs)
+
+        with patch.object(prefix, "_run", side_effect=output_with_leak):
+            with self.assertRaisesRegex(prefix.PrefixError, "path leakage"):
+                prefix.validate_prefix(record(), self.accepted, self.roots)
 
     def test_missing_expected_output_and_forbidden_or_foreign_outputs_are_rejected(self):
         cases = {
