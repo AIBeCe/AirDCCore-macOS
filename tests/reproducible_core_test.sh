@@ -102,6 +102,11 @@ if control.get('MUTATE'):
     Path(control['MUTATE']).write_text('unexpected mutation')
 if args[0]=='--build':
     if control.get('BUILD_FAIL'): sys.exit(29)
+    if control.get('REAL_GENERATOR'):
+        import subprocess
+        result = subprocess.run([{cls.real_cmake!r}, '--build', str(out),
+                                 '--target', 'core_python_generator'])
+        if result.returncode: sys.exit(result.returncode)
     import shutil
     (out/'upstream').mkdir(exist_ok=True)
     shutil.copyfile({str(cls.archive)!r},out/'upstream/libairdcpp.a')
@@ -194,6 +199,7 @@ else:
                     'CMAKE_FIND_USE_CMAKE_SYSTEM_PATH'):
             self.assertIn(f'-D{key}=OFF', args)
         self.assertIn('-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON', args)
+        self.assertIn('-DPYTHON_EXECUTABLE='+sys.executable, args)
         self.assertIn('-DIconv_INCLUDE_DIR='+str(Path(self.tools.sdkroot).resolve()/'usr/include'), args)
         self.assertIn('-DIconv_LIBRARY='+str((Path(self.tools.sdkroot)/'usr/lib/libiconv.tbd').resolve()), args)
         for key in ('CMAKE_PREFIX_PATH','CMAKE_FRAMEWORK_PATH','CMAKE_APPBUNDLE_PATH','PKG_CONFIG_PATH','CPATH','LIBRARY_PATH','CFLAGS','LDFLAGS'):
@@ -205,6 +211,14 @@ else:
                      'archive-sha256.txt','path-leak-scan.txt'):
             self.assertTrue((self.output/name).is_file(), name)
         self.assertEqual((self.case/'Build/airdcpp-core/core-release/historical.txt').read_text(), 'Gate 3\n')
+        interpreter = json.loads((self.output/'core-python.json').read_text())
+        self.assertEqual(interpreter, {
+            'invocation_path': sys.executable,
+            'resolved_path': str(Path(sys.executable).resolve()),
+            'sha256': hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest(),
+            'version': 'Python '+sys.version.split()[0],
+        })
+        self.assertEqual(json.loads((self.output/'tool-inventory.json').read_text()), asdict(self.tools))
 
     def test_rejects_contaminated_summary_before_build(self):
         for bad in ('/opt/homebrew/lib/libbad.a', '/usr/local/Cellar/zlib/lib/libz.a',
@@ -216,6 +230,18 @@ else:
                 self.assertFalse(any(args[0]=='--build' for args in calls))
 
     def test_complete_real_summary_accepts_prefix_and_sdk_paths_with_spaces(self):
+        self.complete_real_summary()
+
+    def test_upstream_python_generator_runs_with_disabled_discovery(self):
+        fingerprints = {name: (self.case/'Build/dependencies'/name/'evidence/input-fingerprint.txt').read_bytes()
+                        for name in ORDER}
+        self.complete_real_summary(with_generator=True)
+        self.assertEqual((self.output/'upstream/generated.txt').read_text(), sys.executable+'\n')
+        self.assertEqual(fingerprints, {
+            name: (self.case/'Build/dependencies'/name/'evidence/input-fingerprint.txt').read_bytes()
+            for name in ORDER})
+
+    def complete_real_summary(self, with_generator=False):
         spaced_case = self.case.with_name(self.case.name + ' with spaces')
         self.case.rename(spaced_case)
         self.case = spaced_case
@@ -260,15 +286,33 @@ else:
             'add_library(airdcpp STATIC "${CMAKE_CURRENT_BINARY_DIR}/tiny.cpp")',
             'target_link_libraries(airdcpp PRIVATE leveldb::leveldb)',
         ))
+        if with_generator:
+            # Mirrors upstream's actual Python search and custom-command use;
+            # the generated output stays inside the fixture build directory.
+            lines.extend((
+                'find_program(PYTHON_EXECUTABLE NAMES python3 python PATHS /sw/bin)',
+                'if(NOT PYTHON_EXECUTABLE)',
+                '  message(FATAL_ERROR "Could not find python executable")',
+                'endif()',
+                'add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated.txt" '
+                'COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixture.py" '
+                '"${CMAKE_CURRENT_BINARY_DIR}/generated.txt")',
+                'add_custom_target(core_python_generator '
+                'DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/generated.txt")',
+            ))
+            write(checkout/'generate_fixture.py',
+                  'from pathlib import Path\nimport sys\n'
+                  'Path(sys.argv[1]).write_text(sys.executable+"\\n")\n')
         write(checkout / 'CMakeLists.txt', '\n'.join(lines) + '\n')
-        subprocess.run(('git', '-C', str(checkout), 'add', 'CMakeLists.txt'), check=True)
+        tracked = ['CMakeLists.txt', *(['generate_fixture.py'] if with_generator else [])]
+        subprocess.run(('git', '-C', str(checkout), 'add', *tracked), check=True)
         subprocess.run(('git', '-C', str(checkout), 'commit', '-qm',
                         'complete summary fixture'), check=True)
         pin = run('git', '-C', str(checkout), 'rev-parse', 'HEAD').stdout.strip()
         write(self.case / 'config/upstream.env',
               'AIRDCPP_CORE_URL=https://example.invalid/core.git\n'
               f'AIRDCPP_CORE_COMMIT={pin}\n')
-        result = self.invoke(REAL_CONFIGURE='1')
+        result = self.invoke(REAL_CONFIGURE='1', **({'REAL_GENERATOR':'1'} if with_generator else {}))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         summary = (self.output / 'airdcpp-configure-summary.txt').read_text()
         self.assertIn('parent.resource_directory=share/airdcpp\n', summary)

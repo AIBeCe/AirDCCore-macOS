@@ -268,8 +268,20 @@ def main():
                        'PYTHONDONTWRITEBYTECODE': '1', 'GIT_OPTIONAL_LOCKS': '0'}
         # No ambient CMake, compiler, pkg-config or library search variables.
         write('environment.json', _canonical_json(environment))
+        python_invocation = Path(sys.executable)
+        if not python_invocation.is_absolute() or not os.access(python_invocation, os.X_OK):
+            fail('Core Python interpreter is not an absolute executable')
+        python_resolved = python_invocation.resolve(strict=True)
+        write('core-python.json', _canonical_json({
+            'invocation_path': str(python_invocation),
+            'resolved_path': str(python_resolved),
+            'sha256': hashlib.sha256(regular(python_resolved)).hexdigest(),
+            'version': subprocess.check_output((str(python_invocation), '--version'),
+                stderr=subprocess.STDOUT, text=True, env=environment).strip(),
+        }))
         argv = [tools.host['cmake'], '--fresh', '-S', str(root), '-B', str(output), '-G', 'Ninja',
                 '-DCMAKE_TOOLCHAIN_FILE='+str(root/'cmake/toolchains/macos-arm64.cmake'),
+                '-DPYTHON_EXECUTABLE='+str(python_invocation),
                 '-DCMAKE_MAKE_PROGRAM='+tools.host['ninja'], '-DCMAKE_OSX_SYSROOT='+str(sdk),
                 '-DAIRDCCORE_REPRODUCIBLE_INPUTS=ON', '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
                 '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON',
