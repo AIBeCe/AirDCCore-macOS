@@ -121,10 +121,15 @@ ATTESTED_FIELDS = ('input-fingerprint.txt', 'inputs.json', 'tool-inventory.json'
 def confinement_binding(lock, confinement):
     authority = [root/'scripts/build', root/'tests/gate6_dependency_build_test.sh',
                  root/'tests/gate6_contract_test.sh']
-    authority += sorted((root/'scripts/lib').glob('*.py'))
-    authority += sorted((root/'scripts/lib').glob('*.sh'))
-    authority += sorted((root/'scripts/lib/dependencies').glob('*'))
-    authority = [p for p in authority if p.suffix in ('.py', '.sh') or p.name == 'build']
+    # --build-dependencies dispatches directly to dependency_build.py before
+    # scripts/build sources any Core/configure shell helper. Its transitive
+    # local imports are these four modules; archive inspection is internal to
+    # dependency_prefix.py. Bind all adapter .py helpers exactly as the normal
+    # input fingerprint does, and the eight adapter paths selected by the lock.
+    authority += [root/'scripts/lib'/name for name in (
+        'dependency_build.py', 'dependency_acquire.py', 'dependency_lock.py', 'dependency_prefix.py')]
+    authority += [adapter_path(root, record) for record in topological_records(lock)]
+    authority += sorted((root/'scripts/lib/dependencies').glob('*.py'))
     components = {}
     for record in topological_records(lock):
         evidence = root/'Build/dependencies'/record.name/'evidence'
@@ -279,6 +284,55 @@ def main():
     print('PASS: Gate 6 sandboxed dependency build, unchanged rerun, Core, consumer, closure, and report')
 
 class OfflineContracts(unittest.TestCase):
+    def test_core_only_changes_preserve_binding_but_dependency_code_invalidates(self):
+        global root
+        previous = root
+        lock = load_lock(root/'config/dependencies.lock')
+        with tempfile.TemporaryDirectory(prefix='gate6-authority-', dir='/private/tmp') as name:
+            root = Path(name)
+            files = ('scripts/build', 'tests/gate6_dependency_build_test.sh',
+                'tests/gate6_contract_test.sh', 'scripts/lib/dependency_build.py',
+                'scripts/lib/dependency_acquire.py', 'scripts/lib/dependency_lock.py',
+                'scripts/lib/dependency_prefix.py', 'scripts/lib/dependencies/command_runner.py',
+                'scripts/lib/dependencies/network_adapter.py', 'scripts/lib/reproducible_core.sh',
+                'scripts/lib/reproducible_consumer.sh', 'scripts/lib/inspect_core_archive.py')
+            for relative in files:
+                path = root/relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('initial authority\n')
+            for record in lock.dependencies:
+                adapter_path(root, record).write_text('adapter\n')
+                directory = root/'Build/dependencies'/record.name/'evidence'
+                directory.mkdir(parents=True)
+                for field in ATTESTED_FIELDS:
+                    (directory/field).write_text('accepted evidence\n')
+                prefix = root/'Build/prefix'/record.name
+                prefix.mkdir(parents=True)
+                (prefix/'ingredient').write_text('accepted prefix\n')
+            try:
+                policy = {'outbound': 'denied', 'localhost': 'allowed'}
+                before = confinement_binding(lock, policy)
+                path = gate_directory()/'dependency-confinement.json'
+                expected = [r.name for r in topological_records(lock)]
+                path.write_bytes(_canonical_json(attestation_document(before, expected, expected)))
+                for relative in ('scripts/lib/reproducible_core.sh', 'scripts/lib/reproducible_consumer.sh',
+                                 'scripts/lib/inspect_core_archive.py'):
+                    (root/relative).write_text('Core-only correction\n')
+                after = confinement_binding(lock, policy)
+                self.assertEqual(after, before)
+                self.assertTrue(attestation_matches(path, after, expected))
+                for relative in ('scripts/lib/dependencies/command_runner.py',
+                                 'scripts/lib/dependencies/build_openssl.sh',
+                                 'scripts/lib/dependency_prefix.py'):
+                    old = (root/relative).read_bytes()
+                    (root/relative).write_text('dependency correction\n')
+                    changed = confinement_binding(lock, policy)
+                    self.assertNotEqual(changed, before)
+                    self.assertFalse(attestation_matches(path, changed, expected))
+                    (root/relative).write_bytes(old)
+            finally:
+                root = previous
+
     def test_matching_attestation_is_reused_without_rebuild_or_write(self):
         global root
         previous = root
