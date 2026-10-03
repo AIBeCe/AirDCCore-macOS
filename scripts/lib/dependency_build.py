@@ -307,6 +307,24 @@ def _write_owned(owner: OwnedDirectory, name: str, data: bytes | str):
 
 def _input_document(lock: DependencyLock, record: DependencyRecord, adapter: Path,
                     dependency_reports: Mapping[str, PrefixReport], tools: ToolInventory):
+    helpers = []
+    # Shared execution helpers affect every adapter, even if this record does
+    # not import them directly. Conservative invalidation avoids stale reuse.
+    for helper in sorted(adapter.parent.glob("*.py"), key=lambda path: path.name):
+        try:
+            before = helper.lstat()
+            if not stat.S_ISREG(before.st_mode):
+                raise BuildError(f"unsafe dependency adapter helper: {helper.name}")
+            fd = os.open(helper, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(opened.st_mode)
+                        or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
+                    raise BuildError(f"unsafe dependency adapter helper: {helper.name}")
+                digest = hashlib.sha256(stream.read()).hexdigest()
+        except OSError as error:
+            raise BuildError(f"unsafe dependency adapter helper: {helper.name}") from error
+        helpers.append({"path": f"scripts/lib/dependencies/{helper.name}", "sha256": digest})
     return {
         "lock_sha256": hashlib.sha256(canonical_bytes(lock)).hexdigest(),
         "source": {"kind": record.source.kind,
@@ -314,6 +332,7 @@ def _input_document(lock: DependencyLock, record: DependencyRecord, adapter: Pat
                    "tree_manifest_sha256": record.source.tree_manifest_sha256},
         "adapter": {"path": f"scripts/lib/dependencies/{adapter.name}",
                     "sha256": hashlib.sha256(adapter.read_bytes()).hexdigest()},
+        "adapter_helpers": helpers,
         "dependencies": [{"name": name,
                           "manifest_sha256": dependency_reports[name].manifest_sha256}
                          for name in record.dependencies],

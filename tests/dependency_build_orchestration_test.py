@@ -542,6 +542,64 @@ stage=$3
         self.assertNotEqual((evidence / "input-fingerprint.txt").read_bytes(), first)
         self.assertEqual((evidence / "attempts/0001/input-fingerprint.txt").read_bytes(), first)
 
+    def test_helper_only_change_rebuilds_and_archives_previous_acceptance(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        helpers = self.project / "scripts/lib/dependencies"
+        (helpers / "z_helper.py").write_text("VALUE = 'unchanged'\n")
+        helper = helpers / "a_helper.py"
+        helper.write_text("VALUE = 'first'\n")
+        marker = self.project / "adapter-runs.txt"
+        self.write_adapter("a", f'/usr/bin/printf "run\\n" >> "{marker}"\n')
+        self.invoke(only_a)
+        evidence = self.project / "Build/dependencies/a/evidence"
+        first = (evidence / "input-fingerprint.txt").read_bytes()
+        accepted = (evidence / "prefix-report.json").read_bytes()
+        inputs = json.loads((evidence / "inputs.json").read_text())
+        self.assertEqual(inputs["adapter_helpers"], [
+            {"path": "scripts/lib/dependencies/a_helper.py",
+             "sha256": hashlib.sha256(b"VALUE = 'first'\n").hexdigest()},
+            {"path": "scripts/lib/dependencies/z_helper.py",
+             "sha256": hashlib.sha256(b"VALUE = 'unchanged'\n").hexdigest()},
+        ])
+        self.invoke(only_a)
+        self.assertEqual(marker.read_text().splitlines(), ["run"])
+        self.assertEqual((evidence / "input-fingerprint.txt").read_bytes(), first)
+        self.assertFalse((evidence / "attempts").exists())
+
+        helper.write_text("VALUE = 'second'\n")
+        self.invoke(only_a)
+
+        self.assertEqual(marker.read_text().splitlines(), ["run", "run"])
+        self.assertNotEqual((evidence / "input-fingerprint.txt").read_bytes(), first)
+        self.assertEqual((evidence / "attempts/0001/input-fingerprint.txt").read_bytes(), first)
+        self.assertEqual((evidence / "attempts/0001/prefix-report.json").read_bytes(), accepted)
+
+    def test_unsafe_python_helper_refuses_accepted_reuse_before_reading(self):
+        only_a = DependencyLock(1, (self.records[0],))
+        self.invoke(only_a)
+        evidence = self.project / "Build/dependencies/a/evidence"
+        before = filesystem_state(evidence)
+        helper = self.project / "scripts/lib/dependencies/unsafe_helper.py"
+        target = self.project / "outside.py"
+        target.write_text("VALUE = 'outside'\n")
+        for kind in ("symlink", "directory", "fifo"):
+            with self.subTest(kind=kind):
+                if kind == "symlink":
+                    helper.symlink_to(target)
+                elif kind == "directory":
+                    helper.mkdir()
+                else:
+                    os.mkfifo(helper)
+                try:
+                    with self.assertRaisesRegex(build.BuildError, "unsafe dependency adapter helper"):
+                        self.invoke(only_a)
+                    self.assertEqual(filesystem_state(evidence), before)
+                finally:
+                    if kind == "directory":
+                        helper.rmdir()
+                    else:
+                        helper.unlink()
+
     def test_changed_accepted_header_is_not_reused_with_stale_evidence(self):
         only_a = DependencyLock(1, (self.records[0],))
         self.invoke(only_a)
