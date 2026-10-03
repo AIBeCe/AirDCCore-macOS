@@ -90,6 +90,27 @@ class DependencyLockTests(unittest.TestCase):
         self.assertEqual([record["dependencies"] for record in records],
                          [[], [], [], [], [], [], ["snappy"], []])
 
+    def test_tracked_cmake_exports_have_complete_release_metadata(self):
+        records = {record["name"]: record for record in
+                   json.loads(TRACKED_LOCK.read_bytes())["dependencies"]}
+        expected = {
+            "snappy": [
+                "lib/cmake/Snappy/SnappyConfig.cmake",
+                "lib/cmake/Snappy/SnappyConfigVersion.cmake",
+                "lib/cmake/Snappy/SnappyTargets-release.cmake",
+                "lib/cmake/Snappy/SnappyTargets.cmake",
+            ],
+            "leveldb": [
+                "lib/cmake/leveldb/leveldbConfig.cmake",
+                "lib/cmake/leveldb/leveldbConfigVersion.cmake",
+                "lib/cmake/leveldb/leveldbTargets-release.cmake",
+                "lib/cmake/leveldb/leveldbTargets.cmake",
+            ],
+        }
+        for name, paths in expected.items():
+            with self.subTest(dependency=name):
+                self.assertEqual(records[name]["expected_metadata"], paths)
+
     def test_duplicate_json_key_is_rejected(self):
         result = self.validate_bytes(b'{"schema_version":1,"schema_version":1,"dependencies":[]}\n')
         self.assertNotEqual(result.returncode, 0)

@@ -323,7 +323,10 @@
         "include/snappy.h"
       ],
       "expected_metadata": [
-        "lib/cmake/Snappy/SnappyConfig.cmake"
+        "lib/cmake/Snappy/SnappyConfig.cmake",
+        "lib/cmake/Snappy/SnappyConfigVersion.cmake",
+        "lib/cmake/Snappy/SnappyTargets-release.cmake",
+        "lib/cmake/Snappy/SnappyTargets.cmake"
       ],
       "forbidden_globs": [
         "**/*.dylib",
@@ -392,7 +395,10 @@
         "include/leveldb/db.h"
       ],
       "expected_metadata": [
-        "lib/cmake/leveldb/leveldbConfig.cmake"
+        "lib/cmake/leveldb/leveldbConfig.cmake",
+        "lib/cmake/leveldb/leveldbConfigVersion.cmake",
+        "lib/cmake/leveldb/leveldbTargets-release.cmake",
+        "lib/cmake/leveldb/leveldbTargets.cmake"
       ],
       "forbidden_globs": [
         "**/*.dylib",
