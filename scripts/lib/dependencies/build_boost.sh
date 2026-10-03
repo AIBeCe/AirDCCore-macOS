@@ -19,20 +19,71 @@ case "$epoch" in ''|*[!0-9]*) die 'EPOCH must be a nonnegative integer' ;; esac
 : "${CXX:?CXX is required}"
 [ -f "$source/LICENSE_1_0.txt" ] || die 'missing Boost license'
 cp -R "$source/." "$build/"
-run bootstrap "$build/bootstrap.sh" --prefix="$stage" --with-libraries=regex,thread
-run build "$build/b2" variant=release link=static runtime-link=shared threading=multi address-model=64 architecture=arm \
-  "--prefix=$stage" \
-  'cxxflags=-arch arm64 -mmacosx-version-min=14.0 -O3 -DNDEBUG' \
-  'linkflags=-arch arm64 -mmacosx-version-min=14.0' --layout=system -j"$jobs" install
+(
+  cd "$build"
+  run bootstrap "$build/bootstrap.sh" --prefix="$stage" --with-libraries=regex,thread
+  run build "$build/b2" variant=release link=static runtime-link=shared threading=multi address-model=64 architecture=arm \
+    "--prefix=$stage" \
+    'cxxflags=-arch arm64 -mmacosx-version-min=14.0 -O3 -DNDEBUG' \
+    'linkflags=-arch arm64 -mmacosx-version-min=14.0' --layout=system -j"$jobs" install
+)
 [ -f "$stage/include/boost/regex.hpp" ] && [ -f "$stage/include/boost/thread.hpp" ] || die 'missing Boost headers'
 [ -f "$stage/lib/libboost_regex.a" ] && [ -f "$stage/lib/libboost_thread.a" ] || die 'missing Boost archives'
 [ -f "$stage/lib/cmake/Boost-1.90.0/BoostConfig.cmake" ] || die 'missing Boost config'
 cp "$source/LICENSE_1_0.txt" "$stage/LICENSE_1_0.txt"
 if find "$stage/lib" \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' -o -name '*.la' \) | grep -q .; then die 'shared Boost artifact installed'; fi
-cat > "$build/consumer.cc" <<'C'
+mkdir -p "$build/consumer-source"
+cat > "$build/consumer-source/consumer.cc" <<'C'
 #include <boost/regex.hpp>
 #include <boost/thread.hpp>
-int main() { bool matched = boost::regex_match("AirDCCore", boost::regex("Air.*")); boost::thread t([]{}); t.join(); return matched ? 0 : 1; }
+int main() {
+  bool matched = boost::regex_match("AirDCCore", boost::regex("Air.*"));
+  bool rejected = !boost::regex_match("Other", boost::regex("Air.*"));
+  int completed = 0;
+  boost::thread t([&completed] { ++completed; });
+  t.join();
+  return matched && rejected && completed == 1 ? 0 : 1;
+}
 C
-run consumer-compile "$CXX" -std=c++17 -arch arm64 -mmacosx-version-min=14.0 -I"$stage/include" "$build/consumer.cc" "$stage/lib/libboost_regex.a" "$stage/lib/libboost_thread.a" -o "$build/consumer"
-run consumer-run "$build/consumer"
+cat > "$build/consumer-source/CMakeLists.txt" <<'CMAKE'
+cmake_minimum_required(VERSION 3.20)
+project(installed_boost_consumer LANGUAGES CXX)
+find_package(Boost 1.90.0 CONFIG REQUIRED COMPONENTS regex thread
+  PATHS "${EXPECTED_BOOST_PREFIX}/lib/cmake/Boost-1.90.0" NO_DEFAULT_PATH)
+# Every Boost archive reached by the imported target closure must be installed
+# under this prefix. Header-only targets and Apple system targets have no archive.
+file(REAL_PATH "${EXPECTED_BOOST_PREFIX}/lib" installed_lib)
+get_property(imported_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
+foreach(target IN LISTS imported_targets)
+  if(NOT target MATCHES "^Boost::")
+    continue()
+  endif()
+  get_target_property(configurations "${target}" IMPORTED_CONFIGURATIONS)
+  set(location_properties IMPORTED_LOCATION)
+  foreach(configuration IN LISTS configurations)
+    string(TOUPPER "${configuration}" configuration)
+    list(APPEND location_properties "IMPORTED_LOCATION_${configuration}")
+  endforeach()
+  foreach(property IN LISTS location_properties)
+    get_target_property(location "${target}" "${property}")
+    if(location)
+      file(REAL_PATH "${location}" archive)
+      string(FIND "${archive}" "${installed_lib}/" prefix_position)
+      if(NOT prefix_position EQUAL 0 OR NOT archive MATCHES "\\.a$" OR NOT EXISTS "${archive}")
+        message(FATAL_ERROR "Boost target ${target} uses an archive outside the installed prefix: ${location}")
+      endif()
+    endif()
+  endforeach()
+endforeach()
+add_executable(boost-consumer consumer.cc)
+target_compile_features(boost-consumer PRIVATE cxx_std_17)
+target_link_libraries(boost-consumer PRIVATE Boost::regex Boost::thread)
+CMAKE
+run consumer-configure cmake -S "$build/consumer-source" -B "$build/consumer-build" \
+  -G 'Unix Makefiles' -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$CXX" \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+  "-DEXPECTED_BOOST_PREFIX=$stage" "-DCMAKE_PREFIX_PATH=$stage" \
+  "-DBoost_DIR=$stage/lib/cmake/Boost-1.90.0" -DBoost_USE_STATIC_LIBS=ON \
+  -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF
+run consumer-build cmake --build "$build/consumer-build" --parallel "$jobs"
+run consumer-run "$build/consumer-build/boost-consumer"
