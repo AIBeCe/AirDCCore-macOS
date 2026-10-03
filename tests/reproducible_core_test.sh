@@ -41,6 +41,7 @@ class ControlledCoreTests(unittest.TestCase):
         cls.bin = cls.work / 'bin'
         cls.bin.mkdir()
         cls.tools = deps.resolve_tool_inventory()
+        cls.real_cmake = cls.tools.host['cmake']
         cls.lock = load_lock(ROOT / 'config/dependencies.lock')
         cls.archive = cls.work / 'fixture.a'
         write(cls.work / 'tiny.c', 'int core_fixture(void) { return 42; }\n')
@@ -68,7 +69,13 @@ class ControlledCoreTests(unittest.TestCase):
               f'AIRDCPP_CORE_URL=https://example.invalid/core.git\nAIRDCPP_CORE_COMMIT={pin}\n')
         # Stub external tool discovery only. Prefix inspection, acceptance checks,
         # fingerprints, scope checks and orchestration execute production code.
-        cls.tools = deps.ToolInventory(cls.tools.sdkroot, cls.tools.sdk_version, cls.tools.apple,
+        sdk_fixture = cls.work / 'SDK with spaces'
+        sdk_stub = (Path(cls.tools.sdkroot) / 'usr/lib/libiconv.tbd').resolve()
+        (sdk_fixture / 'usr/lib').mkdir(parents=True)
+        (sdk_fixture / 'usr/include').mkdir()
+        shutil.copy2(sdk_stub, sdk_fixture / 'usr/lib' / sdk_stub.name)
+        (sdk_fixture / 'usr/lib/libiconv.tbd').symlink_to(sdk_stub.name)
+        cls.tools = deps.ToolInventory(str(sdk_fixture), cls.tools.sdk_version, cls.tools.apple,
                                        {**cls.tools.host, 'cmake': str(cls.bin / 'cmake')}, cls.tools.identities)
         write(cls.work / 'tools.json', json.dumps(asdict(cls.tools)))
         write(cls.bin / 'python3', f'''#!{sys.executable}
@@ -99,6 +106,15 @@ if args[0]=='--build':
     (out/'upstream').mkdir(exist_ok=True)
     shutil.copyfile({str(cls.archive)!r},out/'upstream/libairdcpp.a')
 else:
+    if control.get('REAL_CONFIGURE'):
+        import subprocess
+        result = subprocess.run([
+            {cls.real_cmake!r}, *args,
+            '-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY',
+            '-DCMAKE_C_COMPILER_WORKS=TRUE',
+            '-DCMAKE_CXX_COMPILER_WORKS=TRUE',
+        ])
+        sys.exit(result.returncode)
     (out/'CMakeCache.txt').write_text('CMAKE_BUILD_TYPE:STRING=Release\\n')
     prefix=next(a.split('=',1)[1] for a in args if a.startswith('-DAIRDCCORE_BZIP2_PREFIX='))
     (out/'airdcpp-configure-summary.txt').write_text('target.name=BZip2::BZip2\\ntarget.imported_location='+control.get('BAD_PATH',prefix+'/lib/libbz2.a')+'\\n')
@@ -119,6 +135,8 @@ else:
             for relative in record.expected_archives:
                 (prefix / relative).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(cls.archive, prefix / relative)
+            if record.name == 'bzip2':
+                (prefix / 'include/headers with spaces').mkdir()
             component = cls.template / 'Build/dependencies' / record.name
             evidence = component / 'evidence'
             roots = dict(project=cls.template, source=cls.template / 'Dependencies' / record.name,
@@ -190,11 +208,78 @@ else:
 
     def test_rejects_contaminated_summary_before_build(self):
         for bad in ('/opt/homebrew/lib/libbad.a', '/usr/local/Cellar/zlib/lib/libz.a',
-                    str(Path.home()/'libbad.a'), '/private/tmp/undeclared/libbad.a'):
+                    str(Path.home()/'libbad.a'), '/private/tmp/undeclared/libbad.a',
+                    '/private/tmp/foreign prefix/libbad.a'):
             with self.subTest(path=bad):
                 self.failed('undeclared resolution path', BAD_PATH=bad)
                 calls = [json.loads(line)['argv'] for line in self.calls.read_text().splitlines()]
                 self.assertFalse(any(args[0]=='--build' for args in calls))
+
+    def test_complete_real_summary_accepts_prefix_and_sdk_paths_with_spaces(self):
+        spaced_case = self.case.with_name(self.case.name + ' with spaces')
+        self.case.rename(spaced_case)
+        self.case = spaced_case
+        self.output = self.case / 'Build/airdcpp-core/reproducible-release'
+        checkout = self.case / 'Source/airdcpp-core'
+        imports = (
+            ('BZip2::BZip2', 'bzip2', 'libbz2.a'),
+            ('ZLIB::ZLIB', 'zlib', 'libz.a'),
+            ('OpenSSL::SSL', 'openssl', 'libssl.a'),
+            ('OpenSSL::Crypto', 'openssl', 'libcrypto.a'),
+            ('miniupnpc::miniupnpc', 'miniupnpc', 'libminiupnpc.a'),
+            ('leveldb::leveldb', 'leveldb', 'libleveldb.a'),
+            ('maxminddb::maxminddb', 'libmaxminddb', 'libmaxminddb.a'),
+            ('Boost::thread', 'boost', 'libboost_thread.a'),
+            ('Boost::regex', 'boost', 'libboost_regex.a'),
+            ('Snappy::snappy', 'snappy', 'libsnappy.a'),
+        )
+        lines = ['cmake_minimum_required(VERSION 3.25)',
+                 'project(SummaryFixture LANGUAGES C CXX)']
+        for target, component, archive in imports:
+            prefix = self.case / 'Build/prefix' / component
+            includes = str(prefix / 'include')
+            if component == 'bzip2':
+                includes += ';' + str(prefix / 'include/headers with spaces')
+            lines.extend((
+                f'add_library({target} STATIC IMPORTED GLOBAL)',
+                f'set_target_properties({target} PROPERTIES '
+                f'IMPORTED_CONFIGURATIONS RELEASE '
+                f'IMPORTED_LOCATION_RELEASE "{prefix}/lib/{archive}" '
+                f'INTERFACE_INCLUDE_DIRECTORIES "{includes}")',
+            ))
+        lines.extend((
+            'add_library(Threads::Threads INTERFACE IMPORTED GLOBAL)',
+            'set_property(TARGET leveldb::leveldb PROPERTY '
+            'INTERFACE_LINK_LIBRARIES "snappy;Threads::Threads")',
+            'add_library(Iconv::Iconv INTERFACE IMPORTED GLOBAL)',
+            f'set_target_properties(Iconv::Iconv PROPERTIES '
+            f'INTERFACE_INCLUDE_DIRECTORIES "{self.tools.sdkroot}/usr/include" '
+            f'INTERFACE_LINK_LIBRARIES "{self.tools.sdkroot}/usr/lib/libiconv.tbd")',
+            'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/tiny.cpp" '
+            '"int fixture_core() { return 1; }\\n")',
+            'add_library(airdcpp STATIC "${CMAKE_CURRENT_BINARY_DIR}/tiny.cpp")',
+            'target_link_libraries(airdcpp PRIVATE leveldb::leveldb)',
+        ))
+        write(checkout / 'CMakeLists.txt', '\n'.join(lines) + '\n')
+        subprocess.run(('git', '-C', str(checkout), 'add', 'CMakeLists.txt'), check=True)
+        subprocess.run(('git', '-C', str(checkout), 'commit', '-qm',
+                        'complete summary fixture'), check=True)
+        pin = run('git', '-C', str(checkout), 'rev-parse', 'HEAD').stdout.strip()
+        write(self.case / 'config/upstream.env',
+              'AIRDCPP_CORE_URL=https://example.invalid/core.git\n'
+              f'AIRDCPP_CORE_COMMIT={pin}\n')
+        result = self.invoke(REAL_CONFIGURE='1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        summary = (self.output / 'airdcpp-configure-summary.txt').read_text()
+        self.assertIn('parent.resource_directory=share/airdcpp\n', summary)
+        self.assertIn('parent.global_config_directory=Library/Application Support/AirDC++\n', summary)
+        self.assertIn('sdk=' + self.tools.sdkroot + '\n', summary)
+        self.assertIn('upstream_source=' + str(checkout) + '\n', summary)
+        self.assertIn('target.include_directories='
+                      + str(self.case / 'Build/prefix/bzip2/include') + ';'
+                      + str(self.case / 'Build/prefix/bzip2/include/headers with spaces')
+                      + '\n', summary)
+        self.assertEqual((self.output / 'build-exit-code.txt').read_text(), '0\n')
 
     def test_rejects_stale_fingerprint(self):
         write(self.case/'Build/dependencies/bzip2/evidence/input-fingerprint.txt', '0'*64+'\n')

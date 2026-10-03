@@ -93,16 +93,46 @@ def beneath(path, prefix):
 
 def check_summary(prefixes, sdk, toolchain, tools):
     summary = regular(output / 'airdcpp-configure-summary.txt').decode()
-    # Only the source identity field may name the pinned checkout. Every target
-    # property and compiler/system identity is checked against physical roots.
+    scalar_paths = {'compiler.c.path', 'compiler.cxx.path', 'sdk'}
+    path_lists = {'target.include_directories'}
+    link_lists = {'compiler.cxx.implicit_link_libraries', 'target.interface_libraries'}
+    metadata_fields = {
+        'compiler.id', 'compiler.c.id', 'architecture', 'deployment_target',
+        'build_type', 'cxx_standard', 'cxx_standard_required',
+        'cxx_extensions', 'build_shared_libs', 'enable_natpmp', 'enable_tbb',
+        'source.file_prefix_map', 'parent.version', 'parent.tag_application',
+        'parent.application_id', 'parent.resource_directory',
+        'parent.global_config_directory', 'parent.project_name',
+        'target.name', 'target.exists', 'target.type',
+        'target.imported_configurations',
+    }
     for line in summary.splitlines():
-        if line.startswith('upstream_source='):
-            if line != 'upstream_source='+str(root/'Source/airdcpp-core'):
+        key, separator, value = line.partition('=')
+        if not separator:
+            fail('malformed configure summary field')
+        if key == 'upstream_source':
+            if value != str(root/'Source/airdcpp-core'):
                 fail('unexpected Core source in configure summary')
             continue
-        for token in re.findall(r'/[^;\s<>"\']+', line):
+        if key in scalar_paths:
+            paths = (value,)
+        elif key in path_lists:
+            paths = value.split(';')
+        elif key in link_lists:
+            # Target names and reviewed expressions are checked by the CMake
+            # target audit. Check complete absolute members here.
+            paths = tuple(item for item in value.split(';') if Path(item).is_absolute())
+        elif re.fullmatch(r'target\.imported_location(?:\.[A-Z0-9_]+)?', key):
+            paths = (value,)
+        elif key in metadata_fields:
+            continue
+        else:
+            fail(f'unknown configure summary field: {key}')
+        for token in paths:
+            if not token:
+                continue
             path = Path(token)
-            if not path.exists():
+            if not path.is_absolute() or not path.exists():
                 fail(f'undeclared resolution path: {token}')
             real = path.resolve(strict=True)
             owners = [name for name, prefix in prefixes.items() if beneath(real, prefix)]
