@@ -332,6 +332,50 @@ class ToolResolutionTests(unittest.TestCase):
         if sys.platform != "darwin":
             raise unittest.SkipTest("tool resolution requires macOS")
 
+    def test_inventory_preserves_alias_dispatch_and_resolved_identity(self):
+        with tempfile.TemporaryDirectory(prefix="airdc-tool-alias-") as directory:
+            root = Path(directory).resolve()
+            executable = root / "driver"
+            executable.write_text('#!/bin/sh\n/usr/bin/basename "$0"\n')
+            executable.chmod(0o755)
+            for name in ("clang", "clang++", "ar", "ranlib", "lipo", "nm", "otool", "strings"):
+                (root / name).symlink_to(executable)
+
+            def discover(argv):
+                if argv[1] == "--find":
+                    return str(root / argv[2])
+                return {"--show-sdk-path": "/SDK", "--show-sdk-version": "14.4",
+                        "--show-toolchain-path": str(root / "Toolchains/default")}[argv[-1]]
+
+            with patch.object(build, "_run_text", side_effect=discover):
+                inventory = build.resolve_tool_inventory()
+            pinned = build._pinned_tools(inventory.apple, inventory.identities, "apple")
+            for key, alias in (("cxx", "clang++"), ("ranlib", "ranlib")):
+                with self.subTest(alias=alias):
+                    result = subprocess.run([pinned[key], "--version"], capture_output=True,
+                                            text=True, check=True)
+                    self.assertEqual(result.stdout.strip(), alias)
+                    identity = inventory.identities[f"apple.{key}"]
+                    self.assertEqual(identity["version"], alias)
+                    self.assertEqual(identity["invocation_path"], str(root / alias))
+                    self.assertEqual(identity["resolved_path"], str(executable))
+                    self.assertEqual(identity["sha256"], hashlib.sha256(executable.read_bytes()).hexdigest())
+
+    def test_inventoried_cxx_alias_links_cpp_standard_library(self):
+        inventory = build.resolve_tool_inventory()
+        with tempfile.TemporaryDirectory(prefix="airdc-cxx-alias-") as directory:
+            root = Path(directory)
+            paths = build.BuildPaths(ROOT, root, root, root, root, root, root, root)
+            env = build._environment(record(), paths, inventory)
+            source = root / "main.cpp"
+            source.write_text('#include <iostream>\nint main() { std::cout << "alias works\\n"; }\n')
+            executable = root / "consumer"
+            linked = subprocess.run([env["CXX"], "-arch", "arm64", "-isysroot", env["SDKROOT"],
+                                     "-mmacosx-version-min=14.0", str(source), "-o", str(executable)],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(linked.returncode, 0, linked.stderr)
+            self.assertEqual(subprocess.check_output([str(executable)], text=True), "alias works\n")
+
     def test_poisoned_ambient_path_cannot_select_host_tools(self):
         with tempfile.TemporaryDirectory(prefix="airdc-poison-tools-") as directory:
             poison = Path(directory)

@@ -125,12 +125,12 @@ def _trusted_host_tool(name: str, developer_root: Path) -> Path:
     raise BuildError(f"missing required host tool: {name}")
 
 
-def _version_output(name: str, resolved: Path, apple_toolchain_version: str) -> str:
+def _version_output(name: str, invocation: Path, apple_toolchain_version: str) -> str:
     flags = {"apple.ranlib": "-V"}
     # These Apple utilities do not provide a successful version command.
     if name in ("apple.ar", "apple.lipo", "apple.strings"):
         return "Apple toolchain clang --version:\n" + apple_toolchain_version
-    return _run_version((str(resolved), flags.get(name, "--version")))
+    return _run_version((str(invocation), flags.get(name, "--version")))
 
 
 def resolve_tool_inventory() -> ToolInventory:
@@ -151,16 +151,16 @@ def resolve_tool_inventory() -> ToolInventory:
     discovered = {**{f"apple.{key}": value for key, value in apple.items()},
                   **{f"host.{key}": value for key, value in host.items()},
                   "xcrun": xcrun}
-    apple_toolchain_version = _run_version((str(Path(apple["cc"]).resolve(strict=True)),
-                                            "--version"))
+    apple_toolchain_version = _run_version((apple["cc"], "--version"))
     for name, path in discovered.items():
+        invocation = Path(path).absolute()
         resolved = Path(path).resolve(strict=True)
         if not resolved.is_file() or not os.access(resolved, os.X_OK):
             raise BuildError(f"unsafe tool executable: {name}")
-        identities[name] = {"resolved_path": str(resolved),
+        identities[name] = {"invocation_path": str(invocation),
+                            "resolved_path": str(resolved),
                             "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
-                            "version": _version_output(name, resolved, apple_toolchain_version)}
-    apple = {key: identities[f"apple.{key}"]["resolved_path"] for key in apple}
+                            "version": _version_output(name, invocation, apple_toolchain_version)}
     return ToolInventory(sdkroot, sdk_version, apple, host, identities)
 
 
@@ -238,7 +238,9 @@ def _environment(record: DependencyRecord, paths: BuildPaths, tools: ToolInvento
 
 def _pinned_tools(paths: Mapping[str, str],
                   identities: Mapping[str, Mapping[str, str]], kind: str) -> dict[str, str]:
-    return {name: identities.get(f"{kind}.{name}", {}).get("resolved_path", path)
+    # The alias selects driver behavior (clang++/ranlib); resolved content is
+    # retained separately in the fingerprint, rather than used as argv[0].
+    return {name: identities.get(f"{kind}.{name}", {}).get("invocation_path", path)
             for name, path in paths.items()}
 
 
