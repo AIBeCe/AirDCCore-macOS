@@ -376,6 +376,32 @@ class ToolResolutionTests(unittest.TestCase):
             self.assertEqual(linked.returncode, 0, linked.stderr)
             self.assertEqual(subprocess.check_output([str(executable)], text=True), "alias works\n")
 
+    def test_inventoried_alias_refuses_retargeted_replaced_or_missing_executable(self):
+        for mutation in ("retarget", "content", "missing"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(
+                    prefix="airdc-inventoried-alias-") as directory:
+                root = Path(directory).resolve()
+                executable = root / "driver"
+                executable.write_text('#!/bin/sh\necho original\n')
+                executable.chmod(0o755)
+                alias = root / "cmake"
+                alias.symlink_to(executable)
+                with patch.object(build, "_trusted_host_tool", return_value=alias):
+                    inventory = build.resolve_tool_inventory()
+                if mutation == "retarget":
+                    replacement = root / "replacement"
+                    replacement.write_bytes(executable.read_bytes())
+                    replacement.chmod(0o755)
+                    alias.unlink()
+                    alias.symlink_to(replacement)
+                elif mutation == "content":
+                    executable.write_text('#!/bin/sh\necho replacement\n')
+                else:
+                    executable.unlink()
+                paths = build.BuildPaths(ROOT, root, root, root, root, root, root, root)
+                with self.assertRaises(build.BuildError):
+                    build._environment(record(), paths, inventory)
+
     def test_poisoned_ambient_path_cannot_select_host_tools(self):
         with tempfile.TemporaryDirectory(prefix="airdc-poison-tools-") as directory:
             poison = Path(directory)

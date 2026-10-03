@@ -240,8 +240,23 @@ def _pinned_tools(paths: Mapping[str, str],
                   identities: Mapping[str, Mapping[str, str]], kind: str) -> dict[str, str]:
     # The alias selects driver behavior (clang++/ranlib); resolved content is
     # retained separately in the fingerprint, rather than used as argv[0].
-    return {name: identities.get(f"{kind}.{name}", {}).get("invocation_path", path)
-            for name, path in paths.items()}
+    pinned = {}
+    for name, path in paths.items():
+        identity = identities.get(f"{kind}.{name}", {})
+        invocation = identity.get("invocation_path", path)
+        if "invocation_path" in identity:
+            try:
+                resolved = Path(invocation).resolve(strict=True)
+                unchanged = (str(resolved) == identity.get("resolved_path")
+                             and resolved.is_file() and os.access(resolved, os.X_OK)
+                             and hashlib.sha256(resolved.read_bytes()).hexdigest()
+                             == identity.get("sha256"))
+            except (OSError, RuntimeError) as error:
+                raise BuildError(f"inventoried tool is unavailable: {kind}.{name}") from error
+            if not unchanged:
+                raise BuildError(f"inventoried tool identity changed: {kind}.{name}")
+        pinned[name] = invocation
+    return pinned
 
 
 def adapter_argv(record: DependencyRecord, paths: BuildPaths,
