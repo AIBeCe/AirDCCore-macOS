@@ -207,7 +207,7 @@
       return normalized
   ```
 
-  Reject non-regular/directory/symlink/hard-link types, normalized duplicates, `casefold()` or NFC collisions, unsafe link targets, and more than 100,000 members. Extract into `Dependencies/.staging-<random>`, strip the single declared top-level directory, set mtimes to `source_date_epoch`, and compute the canonical tree manifest before publication.
+  Reject non-regular/directory/symlink/hard-link types, normalized duplicates, `casefold()` or NFC collisions, unsafe link targets, and more than 100,000 members. Extract into `Dependencies/.staging-<random>`, strip the single declared top-level directory, normalize staging mtimes to `source_date_epoch`; require published regular-file and symlink mtimes to retain that epoch; populated-directory mtimes may reflect native publication. Compute the canonical tree manifest before publication.
 
 - [ ] **Step 4: Implement checksum-verified archive download and offline reuse.**
 
@@ -234,7 +234,7 @@
 
 - [ ] **Step 7: Add the opt-in live acquisition gate.**
 
-  `tests/gate6_dependency_acquisition_test.sh` must skip unless `AIRDCCORE_RUN_DEPENDENCY_NETWORK_TESTS=1`, require an initially absent real `Dependencies`, run online acquisition, capture source/cache fingerprints, remove only validated extracted component directories, run `scripts/update --dependencies --offline`, then run it again and assert all fingerprints and mtimes are unchanged. It must verify licenses, exact commits/checksums/tree manifests, absence of `Build`/`Dist`, and `git ls-files Dependencies Build Dist` is empty.
+  `tests/gate6_dependency_acquisition_test.sh` must skip unless `AIRDCCORE_RUN_DEPENDENCY_NETWORK_TESTS=1`, require an initially absent real `Dependencies`, run online acquisition, capture source/cache fingerprints, remove only validated extracted component directories, run `scripts/update --dependencies --offline`, and compare source/cache fingerprints, regular-file and symlink mtimes, and cache mtimes across online and offline reconstruction. Then run offline acquisition again and require the complete filesystem snapshot, including every directory and `.git` metadata, to remain unchanged. It must verify licenses, exact commits/checksums/tree manifests, absence of `Build`/`Dist`, and `git ls-files Dependencies Build Dist` is empty.
 
 - [ ] **Step 8: Run GREEN and the Phase 1 regression for update.**
 

@@ -192,7 +192,28 @@ class AcquisitionTests(unittest.TestCase):
         record = replace(record, source=replace(record.source, tree_manifest_sha256=digest(want)))
         self.cache(archive, record)
         self.acquire(record)
-        self.assertEqual(self.a.tree_manifest(self.project / "Dependencies/fixture"), want)
+        source = self.project / "Dependencies/fixture"
+        self.assertEqual(self.a.tree_manifest(source), want)
+
+        def input_mtimes():
+            return {name: (source / name).lstat().st_mtime_ns
+                    for name in ("LICENSE", "copy", "dir/link")}
+
+        expected = {name: record.source_date_epoch * 1_000_000_000
+                    for name in ("LICENSE", "copy", "dir/link")}
+        self.assertEqual(input_mtimes(), expected)
+        dependencies = self.project / "Dependencies"
+        before = {str(p): p.lstat().st_mtime_ns
+                  for p in [dependencies, *dependencies.rglob("*")]}
+        self.acquire(record)
+        self.assertEqual(before, {
+            str(p): p.lstat().st_mtime_ns
+            for p in [dependencies, *dependencies.rglob("*")]
+        })
+        shutil.rmtree(source)
+        self.acquire(record)
+        self.assertEqual(self.a.tree_manifest(source), want)
+        self.assertEqual(input_mtimes(), expected)
 
     def test_license_and_tree_mismatch_refuse_publication(self):
         archive, record = self.archive()
@@ -484,11 +505,18 @@ class AcquisitionTests(unittest.TestCase):
             self.acquire(record, False)
         source = self.project / "Dependencies/snappy"
         self.assertEqual(self.git(source, "rev-parse", "HEAD").decode().strip(), record.source.commit)
+        self.assertEqual((source / "LICENSE").lstat().st_mtime_ns,
+                         record.source_date_epoch * 1_000_000_000)
         shutil.rmtree(source)
         self.acquire(record)
-        before = {str(p): p.lstat().st_mtime_ns for p in (self.project / "Dependencies").rglob("*")}
+        self.assertEqual((source / "LICENSE").lstat().st_mtime_ns,
+                         record.source_date_epoch * 1_000_000_000)
+        dependencies = self.project / "Dependencies"
+        before = {str(p): p.lstat().st_mtime_ns
+                  for p in [dependencies, *dependencies.rglob("*")]}
         self.acquire(record)
-        self.assertEqual(before, {str(p): p.lstat().st_mtime_ns for p in (self.project / "Dependencies").rglob("*")})
+        self.assertEqual(before, {str(p): p.lstat().st_mtime_ns
+                                 for p in [dependencies, *dependencies.rglob("*")]})
         for mode in ("tracked", "staged", "untracked", "ignored"):
             with self.subTest(mode=mode):
                 if mode in ("tracked", "staged"):

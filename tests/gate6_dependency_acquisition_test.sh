@@ -11,6 +11,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -42,10 +43,11 @@ def sources_and_caches():
         result[record.name] = hashlib.sha256(manifest).hexdigest()
         for path in [source, *source.rglob("*")]:
             relative = path.relative_to(source)
-            if ".git" not in relative.parts:
-                if path.lstat().st_mtime != record.source_date_epoch:
-                    raise SystemExit(f"FAIL: noncanonical source mtime: {record.name}/{relative}")
-                result[f"{record.name}/{relative}:mtime"] = path.lstat().st_mtime_ns
+            info = path.lstat()
+            if ".git" not in relative.parts and not stat.S_ISDIR(info.st_mode):
+                if info.st_mtime_ns != record.source_date_epoch * 1_000_000_000:
+                    raise SystemExit(f"FAIL: noncanonical source input mtime: {record.name}/{relative}")
+                result[f"{record.name}/{relative}:mtime"] = info.st_mtime_ns
         cached = dependencies / ".downloads" / cache_name(record)
         result[cached.name] = (_sha(cached), cached.stat().st_mtime_ns)
     return result
@@ -69,7 +71,7 @@ with OwnedDirectory(dependencies) as owned:
             shutil.rmtree(target)
 update(offline=True)
 if sources_and_caches() != online:
-    raise SystemExit("FAIL: offline reconstruction changed source/cache fingerprints or mtimes")
+    raise SystemExit("FAIL: offline reconstruction changed source/cache fingerprints or input/cache mtimes")
 before = full_snapshot()
 update(offline=True)
 if full_snapshot() != before:

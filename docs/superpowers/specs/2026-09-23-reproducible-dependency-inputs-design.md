@@ -89,7 +89,7 @@ Each dependency record contains:
 - logical name and exact version;
 - role: `aggregate` or `build-only`;
 - source kind, official URL, immutable commit when applicable, archive SHA-256 when applicable, and canonical source-tree manifest SHA-256;
-- source-derived epoch used for deterministic build inputs;
+- source-derived epoch used for deterministic build inputs and canonical published regular-file and symlink mtimes;
 - dependency names and deterministic build order;
 - build system and complete ordered configure/build/install option arrays;
 - expected installed headers, static archives, package metadata, and forbidden shared outputs;
@@ -257,6 +257,13 @@ AIRDCCORE_RUN_DEPENDENCY_NETWORK_TESTS=1 ./tests/gate6_dependency_acquisition_te
 ```
 
 It reconstructs every locked source from an empty dependency directory, verifies all identities and licenses, removes the extracted trees while retaining verified cache, reconstructs offline, and proves a final update is a no-op.
+
+Online and offline reconstruction must preserve source manifests, canonical
+regular-file and symlink mtimes, and cache contents and mtimes. Populated
+directory mtimes are native publication metadata and need not equal the source
+epoch or match across reconstruction. Publication performs no subsequent
+metadata writes to the published tree. The final no-op comparison includes all
+directory and Git metadata mtimes.
 
 ### 12.3 Opt-in live build and consumer
 
