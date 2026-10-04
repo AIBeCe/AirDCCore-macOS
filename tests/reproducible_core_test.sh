@@ -117,6 +117,8 @@ out=Path(args[1] if args[0]=='--build' else args[args.index('-B')+1])
 if control.get('MUTATE'):
     Path(control['MUTATE']).write_text('unexpected mutation')
 if args[0]=='--build':
+    if control.get('FIFO_SCOPE'): os.mkfifo(control['FIFO_SCOPE'])
+    if control.get('FIFO_EVIDENCE'): os.mkfifo(out/'scope-after.json')
     if control.get('BUILD_FAIL'): sys.exit(29)
     import subprocess, hashlib
     authority=out/'version-authority.json'
@@ -395,6 +397,28 @@ else:
         for name in ('scope-before.json','scope-after.json'):
             self.assertTrue((self.output/name).is_file())
 
+    def test_primary_build_error_survives_scope_collection_and_reporting_failure(self):
+        fifo=self.case/'unsupported-scope-entry'
+        result=self.failed('Core build failed',BUILD_FAIL='1',FIFO_SCOPE=str(fifo))
+        self.assertIn('scope verification failed',result.stderr)
+        self.assertIn('unsupported scope entry',result.stderr)
+        self.assertEqual((self.output/'build-exit-code.txt').read_text(),'29\n')
+        fifo.unlink()
+        result=self.failed('Core build failed',BUILD_FAIL='1',FIFO_EVIDENCE='1')
+        self.assertIn('scope evidence reporting failed',result.stderr)
+        self.assertIn('unsafe regular file',result.stderr)
+        self.assertEqual((self.output/'build-exit-code.txt').read_text(),'29\n')
+        (self.output/'scope-after.json').unlink()
+
+    def test_preservation_failure_still_runs_guarded_scope_reporting(self):
+        write(self.output/'build.log','previous failure\n')
+        os.mkfifo(self.output/'unsupported-prior-entry')
+        self.failed('unsafe prior Core output')
+        self.assertTrue((self.output/'scope-after.json').is_file())
+        self.assertEqual((self.output/'scope-status.txt').read_text(),'0\n')
+        self.assertEqual((self.output/'build.log').read_text(),'previous failure\n')
+        (self.output/'unsupported-prior-entry').unlink()
+
     def test_preserves_previous_attempt_and_generated_source_forensics(self):
         write(self.output/'build.log','previous failed native log\n')
         write(self.output/'build-exit-code.txt','1\n')
@@ -512,7 +536,28 @@ set_property(TARGET Snappy::snappy PROPERTY INTERFACE_SOURCES_RELEASE "@WORK@/sn
                 '-DAIRDCPP_CORE_SOURCE_DIR='+str(work/'source'), '-DAIRDCCORE_REPRODUCIBLE_INPUTS=ON',
                 '-DCMAKE_OSX_SYSROOT='+sdk)
         result = run(*args, *(f'-DAIRDCCORE_{n.upper()}_PREFIX={work}/{n}' for n in ORDER))
-        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertNotEqual(result.returncode,0,'ON without stage must never fall back to Source')
+        self.assertIn('private Core source is required',result.stdout+result.stderr)
+        result = run(*args,'-DAIRDCCORE_STAGED_SOURCE_DIR=',
+                     *(f'-DAIRDCCORE_{n.upper()}_PREFIX={work}/{n}' for n in ORDER))
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('private Core source is required',result.stdout+result.stderr)
+        stage=work/'wrapper/source'
+        write(stage/'CMakeLists.txt',text)
+        generator=(ROOT/'Source/airdcpp-core/scripts/generate_version.py').read_bytes()
+        write(stage/'scripts/generate_version.py',generator.decode())
+        import core_stage
+        authority=core_stage.authority_document(json.loads((ROOT/'config/core-reproducible-policy.json').read_text()),
+                    {'scripts/generate_version.py':generator},stage,sys.executable)
+        authority_path=work/'wrapper/version-authority.json'
+        write(authority_path,core_stage.canonical(authority).decode())
+        result=run(*args,'-DAIRDCCORE_STAGED_SOURCE_DIR='+str(stage),
+                   '-DAIRDCCORE_VERSION_AUTHORITY='+str(authority_path),
+                   '-DAIRDCCORE_VERSION_AUTHORITY_SHA256='+core_stage.digest(core_stage.canonical(authority)),
+                   '-DAIRDCCORE_VERSION_ADAPTER='+str(ROOT/'scripts/lib/core_stage.py'),
+                   '-DPYTHON_EXECUTABLE='+sys.executable,
+                   *(f'-DAIRDCCORE_{n.upper()}_PREFIX={work}/{n}' for n in ORDER))
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         summary = (work/'wrapper/airdcpp-configure-summary.txt').read_text()
         self.assertIn('target.interface_libraries=Snappy::snappy;$<LINK_ONLY:Threads::Threads>', summary)
         self.assertIn('source.file_prefix_map=airdcpp-core', summary)

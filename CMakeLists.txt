@@ -40,7 +40,10 @@ set(AIRDCPP_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/airdcpp-core" CA
 # The parent summary must see imports discovered by upstream find_package calls.
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 set(AIRDCPP_EFFECTIVE_SOURCE_DIR "${AIRDCPP_CORE_SOURCE_DIR}")
-if(AIRDCCORE_REPRODUCIBLE_INPUTS AND DEFINED AIRDCCORE_STAGED_SOURCE_DIR)
+if(AIRDCCORE_REPRODUCIBLE_INPUTS)
+  if(NOT DEFINED AIRDCCORE_STAGED_SOURCE_DIR OR AIRDCCORE_STAGED_SOURCE_DIR STREQUAL "")
+    message(FATAL_ERROR "private Core source is required in reproducible mode")
+  endif()
   file(REAL_PATH "${AIRDCCORE_STAGED_SOURCE_DIR}" staged_real)
   if(NOT staged_real STREQUAL "${CMAKE_BINARY_DIR}/source")
     message(FATAL_ERROR "private Core source must be the build-owned source directory")

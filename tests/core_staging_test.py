@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts/lib'))
@@ -111,12 +112,114 @@ class CoreStagingTests(unittest.TestCase):
         self.commit(); self.policy['upstream_commit']=self.pin; self.write_policy()
         with self.assertRaisesRegex(ValueError,'tracked mode'): self.prepare()
 
+    def test_rejects_git_replacement_tree_while_preserving_declared_head(self):
+        original_pin=self.pin
+        (self.checkout/'state.txt').write_text('replacement bytes\n')
+        subprocess.run(('git','-C',str(self.checkout),'add','state.txt'),check=True)
+        self.commit()
+        replacement=self.pin
+        subprocess.run(('git','-C',str(self.checkout),'reset','--soft',original_pin),check=True)
+        subprocess.run(('git','-C',str(self.checkout),'replace',original_pin,replacement),check=True)
+        self.assertEqual(subprocess.check_output(('git','-C',str(self.checkout),'rev-parse','HEAD'),text=True).strip(),original_pin)
+        with self.assertRaisesRegex(ValueError,'tracked content'):
+            self.prepare()
+
+    def test_digest_authority_and_policy_parse_the_verified_read_only(self):
+        prepared=self.prepare()
+        authority_path=Path(prepared['version_authority'])
+        raw=authority_path.read_bytes()
+        changed=json.loads(raw); changed['source_date_epoch']=1
+        real_read=self.core.read_regular
+        reads=[]
+        def swapping_read(path):
+            if Path(path)==authority_path:
+                reads.append(path)
+                return (raw if len(reads)==1 else self.core.canonical(changed)),0o644
+            return real_read(path)
+        stage=Path(prepared['staged_root'])
+        args=[str(authority_path),prepared['version_authority_sha256'],'--',sys.executable,
+              'scripts/generate_version.py','./airdcpp/core/version.inc','0.0.0',
+              'AirDCCore-macOS','org.airdcpp.core.macos.configure']
+        with patch.object(self.core,'read_regular',side_effect=swapping_read), patch.object(self.core.Path,'cwd',return_value=stage):
+            self.core.launch_version(args)
+        self.assertIn(b'VERSION_DATE 1774518197\n',(stage/self.core.GENERATED[0]).read_bytes())
+        self.assertEqual(len(reads),1)
+        policy_path=self.project/'config/core-reproducible-policy.json'
+        policy_raw=policy_path.read_bytes(); changed=json.loads(policy_raw); changed['rationale']='swapped'
+        reads.clear()
+        def swapping_policy(path):
+            if Path(path)==policy_path:
+                reads.append(path)
+                return (policy_raw if len(reads)==1 else self.core.canonical(changed)),0o644
+            return real_read(path)
+        with patch.object(self.core,'read_regular',side_effect=swapping_policy):
+            policy,verified_raw,*unused=self.core.policy_and_manifest(self.project,self.checkout)
+        self.assertEqual(policy,json.loads(verified_raw))
+        self.assertEqual(len(reads),1)
+
     def test_no_follow_writer_never_creates_descendants_of_linked_parent(self):
         outside=self.project/'outside'; outside.mkdir()
         (self.project/'link').symlink_to(outside,target_is_directory=True)
         with self.assertRaises((OSError,ValueError)):
             self.core.write_regular(self.project/'link/created/file.txt',b'forbidden')
         self.assertEqual(list(outside.iterdir()),[])
+
+    def test_regular_helpers_reject_detached_parent_descriptors(self):
+        for operation in ('read','write'):
+            with self.subTest(operation=operation):
+                parent=self.project/operation; parent.mkdir()
+                (parent/'value').write_bytes(b'owned')
+                moved=self.project/(operation+'-moved')
+                real_open=os.open; swapped=False
+                def rename_after_open(path,flags,*args,**kwargs):
+                    nonlocal swapped
+                    fd=real_open(path,flags,*args,**kwargs)
+                    if not swapped and path==parent.name and flags & os.O_DIRECTORY:
+                        swapped=True; parent.rename(moved); parent.mkdir()
+                    return fd
+                with patch.object(self.core.os,'open',side_effect=rename_after_open):
+                    with self.assertRaisesRegex(ValueError,'directory.*changed'):
+                        if operation=='read': self.core.read_regular(parent/'value')
+                        else: self.core.write_regular(parent/'created',b'outside')
+                self.assertFalse((moved/'created').exists())
+
+    def test_completed_validator_rejects_stage_ancestry_replacement(self):
+        prepared=self.prepare(); self.generate(prepared)
+        self.core.finalize_core_source(self.project,self.checkout,self.output,self.tools,sys.executable)
+        stage=Path(prepared['staged_root']); moved=self.project/'detached-stage'
+        real_read=self.core.read_regular; swapped=False
+        def replacing_stage(path):
+            nonlocal swapped
+            result=real_read(path)
+            if not swapped and Path(path)==stage/'state.txt':
+                swapped=True; stage.rename(moved); shutil.copytree(moved,stage)
+            return result
+        with patch.object(self.core,'read_regular',side_effect=replacing_stage):
+            with self.assertRaisesRegex(ValueError,'directory.*changed'):
+                self.core.validate_core_source(self.project,self.checkout,self.output,self.tools,sys.executable)
+
+    def test_finalization_and_forensic_writers_reject_root_rename(self):
+        prepared=self.prepare(); self.generate(prepared)
+        stage=Path(prepared['staged_root'])
+        real_write=self.core.write_regular
+        def replacing_after_final_write(path,*args,**kwargs):
+            result=real_write(path,*args,**kwargs)
+            if Path(path)==self.output/'core-source-provenance.json':
+                moved=self.project/'detached-final-stage'
+                stage.rename(moved); shutil.copytree(moved,stage)
+            return result
+        with patch.object(self.core,'write_regular',side_effect=replacing_after_final_write):
+            with self.assertRaisesRegex(ValueError,'directory.*changed'):
+                self.core.finalize_core_source(self.project,self.checkout,self.output,self.tools,sys.executable)
+        def replacing_after_forensic_write(path,*args,**kwargs):
+            result=real_write(path,*args,**kwargs)
+            if Path(path).name=='source-generated-forensics.json':
+                moved=self.project/'detached-forensic-output'
+                self.output.rename(moved); shutil.copytree(moved,self.output)
+            return result
+        with patch.object(self.core,'write_regular',side_effect=replacing_after_forensic_write):
+            with self.assertRaisesRegex(ValueError,'directory.*changed'):
+                self.core.preserve_core_attempt(self.output,self.checkout)
 
     def test_readonly_validator_rejects_external_hardlink_alias(self):
         prepared=self.prepare(); self.generate(prepared)

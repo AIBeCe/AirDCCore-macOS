@@ -4,6 +4,9 @@ This is deliberately not a general source-patching or generator framework.
 Dependency inputs/fingerprints are neither imported nor modified here.
 """
 from dataclasses import asdict
+from contextlib import contextmanager, ExitStack
+from functools import wraps
+from inspect import signature
 import hashlib
 import json
 import os
@@ -33,33 +36,70 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def directory_fd(path, *, create=False):
+@contextmanager
+def bound_directory(path, *, create=False):
+    """Hold each ancestor and verify it still occupies its requested name."""
     path = Path(path)
     if not path.is_absolute() or '..' in path.parts:
         raise ValueError(f'unsafe directory: {path}')
-    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    chain = [os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)]
+    def identity(info):
+        return info.st_dev, info.st_ino, info.st_mode
+    def check():
+        if identity(os.stat('/',follow_symlinks=False)) != identity(os.fstat(chain[0])):
+            raise ValueError(f'directory ancestry changed: {path}')
+        for index,part in enumerate(path.parts[1:len(chain)]):
+            try:
+                current=os.stat(part,dir_fd=chain[index],follow_symlinks=False)
+            except OSError as error:
+                raise ValueError(f'directory ancestry changed: {path}') from error
+            if identity(current) != identity(os.fstat(chain[index+1])):
+                raise ValueError(f'directory ancestry changed: {path}')
     try:
         for part in path.parts[1:]:
+            check()
             try:
-                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=chain[-1])
             except FileNotFoundError:
                 if not create:
                     raise
-                os.mkdir(part,0o755,dir_fd=fd)
-                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                check()
+                os.mkdir(part,0o755,dir_fd=chain[-1])
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=chain[-1])
+            chain.append(child)
+            check()
+        yield chain[-1],check
+        check()
+    finally:
+        for fd in reversed(chain):
             os.close(fd)
-            fd = child
-        return fd
-    except BaseException:
-        os.close(fd)
-        raise
+
+
+def directory_fd(path, *, create=False):
+    with bound_directory(path,create=create) as (fd,check):
+        return os.dup(fd)
+
+
+def owned_directories(*positions):
+    """Bind roots for the duration of one Core authority operation."""
+    def decorate(function):
+        parameters=tuple(signature(function).parameters)
+        @wraps(function)
+        def guarded(*args,**kwargs):
+            with ExitStack() as stack:
+                for position in positions:
+                    index,suffix=position if isinstance(position,tuple) else (position,None)
+                    path=Path(args[index] if index<len(args) else kwargs[parameters[index]])
+                    stack.enter_context(bound_directory(path/suffix if suffix else path))
+                return function(*args,**kwargs)
+        return guarded
+    return decorate
 
 
 def read_regular(path):
     """No-follow directory traversal and a stable regular-file read."""
     path = Path(path)
-    parent = directory_fd(path.parent)
-    try:
+    with bound_directory(path.parent) as (parent,check):
         fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
         with os.fdopen(fd, 'rb') as stream:
             before = os.fstat(stream.fileno())
@@ -72,15 +112,14 @@ def read_regular(path):
                                    info.st_mtime_ns, info.st_ctime_ns)
             if stable(before) != stable(after) or stable(current) != stable(before):
                 raise ValueError(f'file changed while reading: {path}')
+            check()
             return data, stat.S_IMODE(before.st_mode)
-    finally:
-        os.close(parent)
 
 
 def write_regular(path, data, mode=0o644, epoch=None):
     path = Path(path)
-    parent = directory_fd(path.parent,create=True)
-    try:
+    with bound_directory(path.parent,create=True) as (parent,check):
+        check()
         fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      mode, dir_fd=parent)
         with os.fdopen(fd, 'wb') as stream:
@@ -88,11 +127,55 @@ def write_regular(path, data, mode=0o644, epoch=None):
             os.fchmod(stream.fileno(), mode)
             if epoch is not None:
                 os.utime(stream.fileno(), (epoch, epoch))
-    finally:
-        os.close(parent)
+        check()
 
 
-def json_file(path):
+def create_directory(path, *, exist_ok=False):
+    path=Path(path)
+    with bound_directory(path.parent) as (parent,check):
+        check()
+        try:
+            os.mkdir(path.name,0o755,dir_fd=parent)
+        except FileExistsError:
+            if not exist_ok:
+                raise
+        with bound_directory(path):
+            check()
+
+
+def rename_owned(source,destination):
+    source,destination=map(Path,(source,destination))
+    with bound_directory(source.parent) as (old,old_check), bound_directory(destination.parent) as (new,new_check):
+        before=os.stat(source.name,dir_fd=old,follow_symlinks=False)
+        if not (stat.S_ISREG(before.st_mode) or stat.S_ISDIR(before.st_mode)):
+            raise ValueError(f'unsafe preserved entry: {source}')
+        old_check(); new_check()
+        os.rename(source.name,destination.name,src_dir_fd=old,dst_dir_fd=new)
+        after=os.stat(destination.name,dir_fd=new,follow_symlinks=False)
+        if (before.st_dev,before.st_ino,before.st_mode)!=(after.st_dev,after.st_ino,after.st_mode):
+            raise ValueError('preserved entry identity changed')
+        old_check(); new_check()
+
+
+def set_epoch(path,epoch):
+    path=Path(path)
+    with bound_directory(path.parent) as (parent,check):
+        fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+        try:
+            before=os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError(f'unsafe timestamp target: {path}')
+            check()
+            os.utime(fd,(epoch,epoch))
+            current=os.stat(path.name,dir_fd=parent,follow_symlinks=False)
+            if (before.st_dev,before.st_ino)!=(current.st_dev,current.st_ino):
+                raise ValueError(f'timestamp target changed: {path}')
+            check()
+        finally:
+            os.close(fd)
+
+
+def parse_json(raw):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -100,12 +183,17 @@ def json_file(path):
                 raise ValueError(f'duplicate JSON field: {key}')
             result[key] = value
         return result
-    return json.loads(read_regular(path)[0], object_pairs_hook=pairs)
+    return json.loads(raw, object_pairs_hook=pairs)
 
 
+def json_file(path):
+    return parse_json(read_regular(path)[0])
+
+
+@owned_directories(0,1)
 def policy_and_manifest(project, checkout):
     raw = read_regular(project/'config/core-reproducible-policy.json')[0]
-    policy = json_file(project/'config/core-reproducible-policy.json')
+    policy = parse_json(raw)
     if set(policy) != {'schema','upstream_commit','source_date_epoch','version','stringdefs_sha256','patch','rationale'}:
         raise ValueError('unexpected Core policy fields')
     if policy['schema'] != 1 or policy['version'] != dict(tag='0.0.0', commit_count=0,
@@ -128,17 +216,17 @@ def policy_and_manifest(project, checkout):
     if headers != [(name.encode(),name.encode()) for name in PATCH_TARGETS] or \
             patch_bytes.count(b'\n@@ ') != 3 or patch_bytes.count(b'--- ') != 2 or patch_bytes.count(b'+++ ') != 2:
         raise ValueError('unexpected sole Core patch structure')
-    git_env = {**os.environ, 'GIT_OPTIONAL_LOCKS':'0'}
+    git_env = {**os.environ, 'GIT_OPTIONAL_LOCKS':'0', 'GIT_NO_REPLACE_OBJECTS':'1'}
     def git(*args):
-        return subprocess.check_output(('git','-C',str(checkout),*args), env=git_env)
+        return subprocess.check_output(('git','--no-replace-objects','-C',str(checkout),*args), env=git_env)
     pin = git('rev-parse','HEAD').decode().strip()
     if pin != policy['upstream_commit'] or not re.fullmatch('[0-9a-f]{40}', pin):
         raise ValueError('Core pinned commit differs from policy')
     epoch = policy['source_date_epoch']
-    if type(epoch) is not int or epoch != int(git('show','-s','--format=%ct','HEAD')):
+    if type(epoch) is not int or epoch != int(git('show','-s','--format=%ct',pin)):
         raise ValueError('Core commit epoch differs from policy')
     manifest, contents = [], {}
-    for entry in git('ls-tree','-rz','HEAD').split(b'\0'):
+    for entry in git('ls-tree','-rz',pin).split(b'\0'):
         if not entry:
             continue
         metadata, name = entry.split(b'\t', 1)
@@ -205,6 +293,7 @@ def patch_tool(tools):
     return invocation
 
 
+@owned_directories(0,1)
 def preserve_core_attempt(output, checkout):
     """Move only owned prior output to a numbered recoverable forensic record."""
     output, checkout = map(Path, (output, checkout))
@@ -235,7 +324,7 @@ def preserve_core_attempt(output, checkout):
             generated.append((relative,data,mode,dict(path=relative,sha256=digest(data),
                 device=info.st_dev,inode=info.st_ino,mtime_ns=info.st_mtime_ns,mode=mode)))
     attempts = output/'attempts'
-    attempts.mkdir(exist_ok=True)
+    create_directory(attempts,exist_ok=True)
     os.close(directory_fd(attempts))
     numbers=[]
     for path in attempts.iterdir():
@@ -244,9 +333,9 @@ def preserve_core_attempt(output, checkout):
         os.close(directory_fd(path))
         numbers.append(int(path.name))
     destination=attempts/f'{max(numbers,default=0)+1:04d}'
-    destination.mkdir()
+    create_directory(destination)
     for path in previous:
-        path.rename(destination/path.name)
+        rename_owned(path,destination/path.name)
     for row in inventory:
         if row['kind']=='file' and digest(read_regular(destination/row['path'])[0])!=row['sha256']:
             raise ValueError('preserved Core attempt hash differs')
@@ -257,14 +346,19 @@ def preserve_core_attempt(output, checkout):
     return destination
 
 
+@owned_directories(0,1,2)
 def prepare_core_source(project, checkout, output, tools, environment, python):
     project, checkout, output = map(Path,(project,checkout,output))
     policy, unused, patch, original, contents = policy_and_manifest(project,checkout)
     os.close(directory_fd(output))
     stage = output/'source'
-    stage.mkdir()  # No overwrite or reuse of unvalidated prior staged state.
-    directory_fd_to_close = directory_fd(stage)
-    os.close(directory_fd_to_close)
+    create_directory(stage)  # No overwrite or reuse of unvalidated prior state.
+    return populate_core_source(project,checkout,output,tools,environment,python,policy,patch,original,contents)
+
+
+@owned_directories(0,1,2,(2,'source'))
+def populate_core_source(project,checkout,output,tools,environment,python,policy,patch,original,contents):
+    stage=output/'source'
     for row in original:
         write_regular(stage/row['path'],contents[row['path']],int(row['mode'],8)&0o777,policy['source_date_epoch'])
     snapshot = output/'core-patch.snapshot'
@@ -279,7 +373,7 @@ def prepare_core_source(project, checkout, output, tools, environment, python):
                          (result.stdout+result.stderr).decode(errors='replace')[-1200:])
     # patch may choose current filesystem time; pin the owned patched input too.
     for name in postimages:
-        os.utime(stage/name,(policy['source_date_epoch'],policy['source_date_epoch']),follow_symlinks=False)
+        set_epoch(stage/name,policy['source_date_epoch'])
     patched = [dict(row,sha256=postimages[row['path']]) if row['path'] in postimages else row for row in original]
     authority = authority_document(policy,contents,stage,python)
     inputs = inputs_document(project,original,patched,authority,tools,python)
@@ -298,6 +392,7 @@ def prepare_core_source(project, checkout, output, tools, environment, python):
     return dict(provenance,version_authority=str(output/'version-authority.json'))
 
 
+@owned_directories(0,1,2,(2,'source'))
 def checked_stage(project,checkout,output,tools,python,complete):
     policy, unused, unused_patch, original, contents = policy_and_manifest(project,checkout)
     stage=output/'source'
@@ -343,18 +438,23 @@ def checked_stage(project,checkout,output,tools,python,complete):
     return provenance,manifest
 
 
+@owned_directories(0,1,2,(2,'source'))
 def finalize_core_source(project,checkout,output,tools,python):
     """Only the builder calls this writer after both generators have completed."""
     project,checkout,output=map(Path,(project,checkout,output))
     provenance,manifest=checked_stage(project,checkout,output,tools,python,True)
     for name,value in (('staged-source-manifest.json',manifest),('core-source-provenance.json',provenance)):
         # Replace owned regular evidence only; never follow a symlink.
-        read_regular(output/name)
-        (output/name).unlink()
-        write_regular(output/name,canonical(value))
+        with bound_directory(output) as (parent,check):
+            read_regular(output/name)
+            check()
+            os.unlink(name,dir_fd=parent)
+            write_regular(output/name,canonical(value))
+            check()
     return provenance
 
 
+@owned_directories(0,1,2,(2,'source'))
 def validate_core_source(project,checkout,output,tools,python):
     """Read-only consumer API. Recompute authority from live pin/policy/tools.
 
@@ -376,8 +476,24 @@ def launch_version(args):
     raw=read_regular(authority_path)[0]
     if digest(raw)!=args[1]:
         raise ValueError('version authority sha256 mismatch')
-    authority=json_file(authority_path)
+    authority=parse_json(raw)
+    if set(authority) != {'schema','staged_root','upstream_commit','source_date_epoch','version',
+                          'python','generator_path','generator_sha256','output_path'} or \
+            authority['schema'] != 1 or type(authority['source_date_epoch']) is not int or \
+            authority['source_date_epoch'] != 1774518197 or \
+            not re.fullmatch('[0-9a-f]{40}',authority['upstream_commit']) or \
+            authority['version'] != dict(tag='0.0.0',commit_count=0,
+                application_name='AirDCCore-macOS',application_id='org.airdcpp.core.macos.configure') or \
+            authority['generator_path'] != 'scripts/generate_version.py' or \
+            authority['output_path'] != GENERATED[0] or \
+            not re.fullmatch('[0-9a-f]{64}',authority['generator_sha256']):
+        raise ValueError('unreviewed version authority schema')
     stage=Path(authority['staged_root'])
+    return launch_authorized_version(stage.parent,stage,authority_path,authority,args)
+
+
+@owned_directories(0,1)
+def launch_authorized_version(output,stage,authority_path,authority,args):
     if stage!=Path.cwd() or authority_path!=stage.parent/'version-authority.json' or \
             authority['python']!=python_identity(sys.executable):
         raise ValueError('version execution authority differs')

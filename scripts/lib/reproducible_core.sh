@@ -207,12 +207,12 @@ def main():
         if any(p.is_symlink() for p in output.rglob('*')):
             fail('symlinked reproducible output path')
     before = snapshot()
-    # Archive previous evidence before any validation failure can write fresh
-    # scope diagnostics. Only the already-validated owned output is moved.
-    if output.exists():
-        preserve_core_attempt(output, root/'Source/airdcpp-core')
     primary_error = None
     try:
+        # Preservation is guarded too: its failure still receives a scope check.
+        # Move only already-validated owned output before fresh diagnostics.
+        if output.exists():
+            preserve_core_attempt(output, root/'Source/airdcpp-core')
         subprocess.run(('/bin/sh', '-c', '. "$1/scripts/lib/upstream.sh"; '
                         '. "$1/scripts/lib/configure.sh"; '
                         'load_upstream_config "$1/config/upstream.env" && assert_supported_host && '
@@ -351,18 +351,29 @@ def main():
         primary_error = error
         raise
     finally:
-        after = snapshot()
-        if output.exists() and not output.is_symlink():
-            write('scope-after.sha256', hashlib.sha256(_canonical_json(after)).hexdigest()+'\n')
-            write('scope-after.json', _canonical_json(after))
-            write('scope-status.txt', '0\n' if after == before else '1\n')
-        if after != before:
+        scope_errors = []
+        after = None
+        try:
+            after = snapshot()
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            scope_errors.append('scope verification failed: '+str(error))
+        if after is not None and after != before:
             initial = {entry[0]: entry for entry in before}
             final = {entry[0]: entry for entry in after}
             changed = sorted(path for path in initial.keys() | final.keys()
                              if initial.get(path) != final.get(path))
-            scope_error = 'scope changed outside reproducible-release: '+', '.join(changed[:12])
-            fail((str(primary_error)+'; additionally: ' if primary_error else '')+scope_error)
+            scope_errors.append('scope changed outside reproducible-release: '+', '.join(changed[:12]))
+        try:
+            if output.exists() or output.is_symlink():
+                safe_directory(output)
+                if after is not None:
+                    write('scope-after.sha256', hashlib.sha256(_canonical_json(after)).hexdigest()+'\n')
+                    write('scope-after.json', _canonical_json(after))
+                write('scope-status.txt', '0\n' if after == before else '1\n')
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            scope_errors.append('scope evidence reporting failed: '+str(error))
+        if scope_errors:
+            fail((str(primary_error)+'; additionally: ' if primary_error else '')+'; '.join(scope_errors))
     print(f'build: reproducible Core archive candidate={output}/upstream/libairdcpp.a')
 
 try:
