@@ -185,6 +185,8 @@ def parse_link_command(command: str, project_root: Path,
     index = 1
     while index < len(arguments):
         argument = arguments[index]
+        if prefixes is not None and argument.startswith('@'):
+            fail(f'unsupported top-level response file: {argument!r}')
         if prefixes is not None and argument.startswith('-Wl,'):
             bundled_linker_options(argument)
             index += 1

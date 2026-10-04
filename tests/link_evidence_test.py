@@ -216,6 +216,26 @@ class LinkEvidenceTests(unittest.TestCase):
         self.assertEqual(EVIDENCE.parse_link_command('clang++ -lSystem -Wl,-dead_strip,-lresolv -o app',self.project),
                          [('system','-lSystem')])
 
+    def test_strict_mode_rejects_top_level_response_file_without_replacing_evidence(self):
+        prefix = self.project / 'prefix'
+        prefix.mkdir()
+        archive = prefix / 'libfixture.a'
+        archive.touch()
+        response = self.work / 'foreign inputs.rsp'
+        response.write_text('/unclassified/libforeign.a\n')
+        self.output.write_text('preserve me\n')
+        for token in (f'@{response}', '@inputs.rsp', '@'):
+            with self.subTest(token=token):
+                self.command.write_text(f'clang++ "{archive}" "{token}" -o app\n')
+                result = self.run_normalizer('--allowed-prefix', f'fixture={prefix}')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('response', result.stderr)
+                self.assertEqual(self.output.read_text(), 'preserve me\n')
+
+    def test_legacy_mode_keeps_top_level_response_file_behavior(self):
+        self.assertEqual(EVIDENCE.parse_link_command('clang++ -lSystem @foreign.rsp -o app',
+                                                     self.project), [('system', '-lSystem')])
+
     def test_malformed_omission_row_does_not_publish_output(self):
         self.output.write_text("preserve me\n", encoding="utf-8")
         self.command.write_text("/usr/bin/clang++ main.o -lSystem -o app\n", encoding="utf-8")
