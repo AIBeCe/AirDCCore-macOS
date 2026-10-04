@@ -514,6 +514,8 @@
 - Produces: `scripts/build --build-reproducible-core`, Core archive `Build/airdcpp-core/reproducible-release/upstream/libairdcpp.a`, and normalized package-resolution evidence.
 - Does not modify `Build/airdcpp-core/core-release`, Gate 2–5 evidence, `Dependencies`, or `Dist`.
 
+**Approved native correction:** build from a manifest-verified private tracked-file source stage under the owned reproducible output; original Source remains unchanged. `core_stage.py`, `config/core-reproducible-policy.json`, and one hash-bound patch bind exactly HashStore.cpp, CMakeLists.txt, and NetworkUtil.cpp. Reject non-24-byte Tiger-tree keys and copy into their byte array; replace only the version target COMMAND; use a constant IPv6-maximum address buffer while retaining the selected inet_ntop length. Deterministic metadata uses pinned epoch 1774518197/count zero and fixed tag/application policy. Preserve strict warnings, failed native launcher/generator/HashStore/VLA evidence, original/patched/final manifests, and staged-header provenance. The consumer validates the additive read-only staging API and both actual tag/commit identities. This supersedes direct compilation from the original checkout, without warning relaxation or source edits.
+
 - [ ] **Step 1: Write failing controlled-resolution tests.**
 
   With fake component prefixes and fake CMake, assert exact prefix order, exact roots for BZip2/zlib/OpenSSL, registries disabled, empty user/system environment paths, SDK Iconv selection, and separate output path. Poison `CMAKE_PREFIX_PATH`, `CMAKE_FRAMEWORK_PATH`, `CMAKE_APPBUNDLE_PATH`, `PKG_CONFIG_PATH`, `CPATH`, `LIBRARY_PATH`, and CMake user registries with Homebrew-like paths; require the command to clear or override them. Feed a configure summary containing `/opt/homebrew`, `/usr/local/Cellar`, the user home, or an undeclared prefix and require refusal.
@@ -548,6 +550,8 @@
   ```
 
   Reuse Gate 3’s source-prefix-map and archive inspection. Record the complete command, lock fingerprint, component manifest hashes, tool inventory, CMake cache, configure summary, resolution TSV, build log/status, archive members/symbols/strings/hash, and path-leak scan. Reject any Homebrew non-system path.
+
+  Native implementation uses the approved private source stage and exact three-file patch described above. Bind deterministic version authority and generated outputs; validate original Source identity/bytes after success or failure. Add `rtk python3 tests/core_staging_test.py` to the final regression suite.
 
 - [ ] **Step 6: Add the build mode and scope guards.**
 
@@ -714,6 +718,7 @@
   rtk ./tests/dependency_leveldb_chain_test.sh
   rtk ./tests/dependency_boost_adapter_test.sh
   rtk ./tests/reproducible_core_test.sh
+  rtk python3 tests/core_staging_test.py
   rtk ./tests/reproducible_consumer_test.sh
   rtk ./tests/gate6_contract_test.sh --self-test
   rtk ./tests/gate6_contract_test.sh
@@ -771,4 +776,4 @@
 
 - [ ] **Step 6: After approval, merge according to GitFlow and reverify.**
 
-  Switch the main checkout to `develop`, require it clean and unchanged from the reviewed base, merge with `--no-ff feature/reproducible-dependencies`, rerun Task 10 Step 7 on the merge result, and only then remove the completed worktree/branch. Do not create `master`, a release branch, tag, aggregate archive, or `Dist`.
+  Switch the main checkout to `develop`, require it clean and unchanged from the reviewed base, merge with `--no-ff feature/reproducible-dependencies`, and reverify the merge result. The user's explicit local-integration approval is recorded by the coordinator; it does not permit integration before final Gate 6 and whole-branch review PASS. Preserve the feature worktree/branch and ignored native artifacts: they contain the only accepted native outputs and raw evidence. This approved preservation deviation supersedes removing the completed worktree/branch. Do not create `master`, a release branch, tag, aggregate archive, or `Dist`, and do not push or start Phase 7.

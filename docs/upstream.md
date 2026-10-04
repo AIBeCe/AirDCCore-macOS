@@ -12,6 +12,8 @@ Archive bytes are checked against locked SHA-256 values; Git sources are checked
 
 Verified downloads live in `Dependencies/.downloads`; archive names bind component/version/checksum, and Git bundles bind commits. `--offline` fails on missing or corrupt input without contacting the network. Do not replace a checksum or edit extracted source to bypass a failure. Adapters apply reviewed tracked patches only to private build copies.
 
+Reproducible Core likewise uses a manifest-verified private tracked-file stage, not the original checkout. Its separately tracked policy binds one exact three-file patch, deterministic pinned-epoch/count-zero version generation, and staged-header provenance. Failed original generated `version.inc` bytes remain forensic evidence; they must not be guessed or restored to make historical contracts pass.
+
 The acquisition gate requires `Dependencies`, `Build`, and `Dist` initially absent:
 
 ```sh
