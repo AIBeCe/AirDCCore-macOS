@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT/'scripts/lib'))
 import dependency_build as deps
 from dependency_lock import load_lock, canonical_bytes, topological_records
 from dependency_prefix import validate_prefix
+import core_stage
 
 ORDER = ('bzip2','zlib','openssl','miniupnpc','leveldb','libmaxminddb','snappy','boost')
 
@@ -25,8 +26,8 @@ def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
 
-def checked(*argv):
-    result = subprocess.run(argv, capture_output=True, text=True)
+def checked(*argv, **kwargs):
+    result = subprocess.run(argv, capture_output=True, text=True, **kwargs)
     if result.returncode:
         raise AssertionError(result.stdout+result.stderr)
 
@@ -38,24 +39,37 @@ class ConsumerTests(unittest.TestCase):
         cls.tools = deps.resolve_tool_inventory()
         cls.lock = load_lock(ROOT/'config/dependencies.lock')
         cls.template = cls.work/'template with spaces'
-        for directory in ('scripts','config','smoke-test'):
+        for directory in ('scripts','config','smoke-test','cmake'):
             shutil.copytree(ROOT/directory, cls.template/directory, ignore=shutil.ignore_patterns('__pycache__'))
+        shutil.copy2(ROOT/'CMakeLists.txt',cls.template/'CMakeLists.txt')
         write(cls.template/'docs/decisions/0001-aggregate-static-distribution.md',
               (ROOT/'docs/decisions/0001-aggregate-static-distribution.md').read_text())
         checkout = cls.template/'Source/airdcpp-core'
         write(checkout/'airdcpp/stdinc.h', '#pragma once\n')
         write(checkout/'airdcpp/core/version.h',
-              '#include <string>\nnamespace dcpp { std::string getVersionTag() noexcept; std::string getGitCommit() noexcept; }\n')
+              '#include <string>\n#include "version.inc"\n'
+              'namespace dcpp { std::string getVersionTag() noexcept; std::string getGitCommit() noexcept; }\n')
+        for relative in ('CMakeLists.txt','airdcpp/hash/HashStore.cpp','scripts/generate_version.py',
+                         'scripts/generate_stringdefs.py','airdcpp/core/localization/StringDefs.h'):
+            (checkout/relative).parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(ROOT/'Source/airdcpp-core'/relative,checkout/relative)
+        write(checkout/'.gitignore','/airdcpp/core/version.inc\n/airdcpp/core/localization/StringDefs.cpp\n')
         checked('git','init','-q',str(checkout))
         for key,value in (('user.name','Tests'),('user.email','tests@example.invalid'),('commit.gpgsign','false')):
             checked('git','-C',str(checkout),'config',key,value)
         checked('git','-C',str(checkout),'add','.')
-        checked('git','-C',str(checkout),'commit','-qm','fixture')
+        checked('git','-C',str(checkout),'commit','-qm','fixture',env={**os.environ,
+            'GIT_AUTHOR_DATE':'1774518197 +0000','GIT_COMMITTER_DATE':'1774518197 +0000'})
         cls.pin = subprocess.check_output(('git','-C',str(checkout),'rev-parse','HEAD'),text=True).strip()
         checked('git','-C',str(checkout),'checkout','-q','--detach')
         checked('git','-C',str(checkout),'remote','add','origin','https://example.invalid/core.git')
         write(cls.template/'config/upstream.env',
               'AIRDCPP_CORE_URL=https://example.invalid/core.git\nAIRDCPP_CORE_COMMIT='+cls.pin+'\n')
+        policy=json.loads((cls.template/'config/core-reproducible-policy.json').read_text())
+        policy['upstream_commit']=cls.pin
+        write(cls.template/'config/core-reproducible-policy.json',json.dumps(policy))
+        write(checkout/'airdcpp/core/version.inc','#error original generated version is not a header authority\n')
+        write(checkout/'airdcpp/core/localization/StringDefs.cpp','original generated forensic bytes\n')
         # Locked patches must be tracked by the consuming project, as in the
         # real checkout. Keep that provenance check active in private fixtures.
         checked('git','init','-q',str(cls.template))
@@ -121,6 +135,14 @@ class ConsumerTests(unittest.TestCase):
         write(self.core/'upstream-identity.json',deps._canonical_json(dict(commit=self.pin,
             origin='https://example.invalid/core.git',source_prefix_map='airdcpp-core')).decode())
         write(self.core/'build-exit-code.txt','0\n')
+        prepared=core_stage.prepare_core_source(self.case,self.case/'Source/airdcpp-core',
+                                               self.core,self.tools,os.environ,sys.executable)
+        stage=Path(prepared['staged_root'])
+        checked(sys.executable,str(self.case/'scripts/lib/core_stage.py'),'version',prepared['version_authority'],
+                prepared['version_authority_sha256'],'--',sys.executable,'scripts/generate_version.py',
+                './airdcpp/core/version.inc','0.0.0','AirDCCore-macOS','org.airdcpp.core.macos.configure',cwd=stage)
+        checked(sys.executable,'scripts/generate_stringdefs.py','./airdcpp/core/localization/',cwd=stage)
+        core_stage.finalize_core_source(self.case,self.case/'Source/airdcpp-core',self.core,self.tools,sys.executable)
         self.make_core(self.pin)
         self.bin = self.case/'fixture-bin'
         self.bin.mkdir()
@@ -146,11 +168,11 @@ exec(compile(sys.stdin.read(),'<consumer>', 'exec'),{{'__name__':'__main__'}})
         for key in ('CMAKE_PREFIX_PATH','CMAKE_MODULE_PATH','PKG_CONFIG_PATH','CPATH','LIBRARY_PATH','CFLAGS','LDFLAGS'):
             self.env[key]='/opt/homebrew/poison'
 
-    def make_core(self, identity, extra=''):
+    def make_core(self, identity, extra='', tag='0.0.0'):
         source = self.work/'core.cpp'
         declarations = ''.join('int fixture_'+n+'(void);' for n in ('bz2','z','ssl','mini','level','max'))
         write(source, '#include <string>\n#include <iconv.h>\nextern "C" { '+declarations+' }\n'+extra+
-              '\nnamespace dcpp { std::string getVersionTag() noexcept { return {}; } '
+              '\nnamespace dcpp { std::string getVersionTag() noexcept { return "'+tag+'"; } '
               'std::string getGitCommit() noexcept { '+
               ''.join('fixture_'+n+'();' for n in ('bz2','z','ssl','mini','level','max'))+
               'iconv_t c=iconv_open("UTF-8","ASCII"); if(c!=(iconv_t)-1) iconv_close(c); '
@@ -210,10 +232,70 @@ exec(compile(sys.stdin.read(),'<consumer>', 'exec'),{{'__name__':'__main__'}})
         self.assertEqual((self.case/'Build/airdcpp-core/link-interface/historical.txt').read_text(),
                          'OpenSSL 3.6.4 unchanged\n')
         self.assertFalse((self.case/'Dist').exists())
+        self.assertEqual((self.output/'stage/include/airdcpp/core/version.inc').read_bytes(),
+                         (self.core/'source/airdcpp/core/version.inc').read_bytes())
+        self.assertEqual((self.case/'Source/airdcpp-core/airdcpp/core/version.inc').read_text(),
+                         '#error original generated version is not a header authority\n')
+        for name in core_stage.EVIDENCE_FILES:
+            self.assertEqual((self.output/name).read_bytes(),(self.core/name).read_bytes())
+        inputs=json.loads((self.output/'input-manifest.json').read_text())
+        self.assertEqual(inputs['smoke_source_path'],'smoke-test/reproducible-main.cpp')
+        self.assertEqual(inputs['smoke_source_sha256'],
+                         hashlib.sha256((self.case/'smoke-test/reproducible-main.cpp').read_bytes()).hexdigest())
+        self.assertEqual(inputs['expected_version_tag'],'0.0.0')
+        self.assertEqual(inputs['expected_git_commit'],self.pin)
+        self.assertEqual(inputs['core_source_evidence_sha256'],{
+            name:hashlib.sha256((self.core/name).read_bytes()).hexdigest() for name in core_stage.EVIDENCE_FILES})
 
     def test_runtime_pin_is_enforced(self):
         self.make_core('wrong')
         self.failed('consumer runtime identity differs from pinned Core')
+
+    def test_runtime_tag_is_enforced_with_valid_stage_provenance(self):
+        self.make_core(self.pin,tag='wrong-tag')
+        self.failed('consumer runtime identity differs from pinned Core')
+
+    def test_stage_header_and_declared_root_tampering_are_rejected_before_link(self):
+        header=self.core/'source/airdcpp/core/version.h'
+        original=header.read_bytes()
+        header.write_bytes(original+b'// changed\n')
+        self.failed('Core staged content differs')
+        self.assertFalse((self.output/'core-only').exists())
+        header.write_bytes(original)
+        provenance=self.core/'core-source-provenance.json'
+        authority=json.loads(provenance.read_text())
+        authority['header_root']=str(self.case/'Source/airdcpp-core/airdcpp')
+        provenance.write_bytes(core_stage.canonical(authority))
+        self.failed('Core completed staged provenance differs')
+        self.assertFalse((self.output/'core-only').exists())
+
+    def test_version_authority_fingerprint_and_incomplete_stage_are_rejected(self):
+        for name,message in (('version-authority.json','Core authority differs'),
+                             ('core-input-fingerprint.txt','Core input fingerprint differs'),
+                             ('core-source-provenance.json','Core completed staged provenance differs')):
+            with self.subTest(name=name):
+                path=self.core/name
+                original=path.read_bytes()
+                path.write_bytes(original+b'\n')
+                self.failed(message)
+                self.assertFalse((self.output/'core-only').exists())
+                path.write_bytes(original)
+        provenance=self.core/'core-source-provenance.json'
+        authority=json.loads(provenance.read_text())
+        authority['complete']=False
+        provenance.write_bytes(core_stage.canonical(authority))
+        self.failed('Core completed staged provenance differs')
+
+    def test_stage_header_symlink_is_rejected_without_mutating_source(self):
+        header=self.core/'source/airdcpp/core/version.h'
+        original=self.case/'Source/airdcpp-core/airdcpp/core/version.h'
+        before=original.stat()
+        header.unlink()
+        header.symlink_to(original)
+        self.failed('unsafe staged content')
+        after=original.stat()
+        self.assertEqual((before.st_ino,before.st_mtime_ns),(after.st_ino,after.st_mtime_ns))
+        self.assertFalse((self.output/'core-only').exists())
 
     def test_compound_driver_flag_cannot_add_explicit_system_link(self):
         cmake=self.case/'smoke-test/CMakeLists.txt'

@@ -5,6 +5,7 @@ export PYTHONDONTWRITEBYTECODE=1 GIT_OPTIONAL_LOCKS=0
 python3 - "$1" <<'PY'
 from dataclasses import asdict
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -20,6 +21,7 @@ from dependency_build import (BuildError, _accepted_evidence_matches, _canonical
     _input_document, _pinned_tools, adapter_path, resolve_tool_inventory)
 from dependency_lock import canonical_bytes, load_lock, topological_records
 from dependency_prefix import validate_prefix
+from core_stage import validate_core_source
 from normalize_link_evidence import (adr_expected_rows, assert_adr_closure, parse_link_command,
                                      validate_omissions, classify_runtime_defaults)
 
@@ -182,13 +184,17 @@ def run_case(name, selected, expectation, tools, environment, sdk):
         fail('Core-only link unexpectedly succeeded')
     return linked.returncode
 
-def controlled_targets(prefixes, iconv):
+def controlled_targets(prefixes, iconv, version_tag, commit):
     def quoted(path):
         value = str(path)
         if any(c in value for c in ('"',';','\n','\r','$','\\')):
             fail('CMake input path contains an unsupported character')
         return '"'+value+'"'
-    lines = ['function(reproducible_finish_consumer)']
+    lines = ['function(reproducible_finish_consumer)',
+             f'  set_property(TARGET airdcpp-smoke PROPERTY SOURCES {quoted(root/"smoke-test/reproducible-main.cpp")})',
+             '  target_compile_definitions(airdcpp-smoke PRIVATE',
+             f'    "AIRDCCORE_EXPECTED_VERSION_TAG=\\"{version_tag}\\""',
+             f'    "AIRDCCORE_EXPECTED_GIT_COMMIT=\\"{commit}\\"")']
     for prefix in prefixes.values():
         lines.append(f'  target_include_directories(airdcpp-smoke PRIVATE {quoted(prefix/"include")})')
     # Controlled static interfaces expand at their declared physical positions.
@@ -262,6 +268,16 @@ def main():
         origin = subprocess.check_output(('git','-C',str(checkout),'remote','get-url','--all','origin'),text=True).strip()
         if regular(core/'upstream-identity.json') != _canonical_json(dict(commit=pin,origin=origin,source_prefix_map='airdcpp-core')):
             fail('Task 8 Core upstream identity differs')
+        core_authority = validate_core_source(root,checkout,core,tools,sys.executable)
+        staged_source = Path(core_authority['staged_root'])
+        header_root = Path(core_authority['header_root'])
+        if (staged_source != core/'source' or header_root != staged_source/'airdcpp'
+                or core_authority['original_root'] != str(checkout)
+                or core_authority['upstream_commit'] != pin or core_authority['complete'] is not True):
+            fail('Task 8 staged header authority differs')
+        source_evidence = {name:regular(core/name) for name in core_authority['evidence_files']}
+        version_authority = json.loads(source_evidence['version-authority.json'])
+        version_tag = version_authority['version']['tag']
         archive = core/'upstream/libairdcpp.a'
         directory(archive.parent)
         if regular(core/'archive-sha256.txt').decode() != digest(archive)+'  upstream/libairdcpp.a\n':
@@ -284,6 +300,8 @@ def main():
         write(output/'component-manifests.tsv',manifests)
         write(output/'lock-fingerprint.txt',regular(core/'lock-fingerprint.txt'))
         write(output/'upstream-identity.json',regular(core/'upstream-identity.json'))
+        for name,data in source_evidence.items():
+            write(output/name,data)
         inspection = output/'core-inspection'
         directory(inspection,create=True)
         subprocess.run((sys.executable,str(root/'scripts/lib/inspect_core_archive.py'),str(archive),
@@ -297,7 +315,10 @@ def main():
         write(output/'core-archive-sha256.txt',regular(core/'archive-sha256.txt'))
         write(output/'input-manifest.json',_canonical_json(dict(
             upstream_commit=pin,core_archive_sha256=digest(archive),
-            smoke_source_sha256=digest(root/'smoke-test/main.cpp'),
+            smoke_source_path='smoke-test/reproducible-main.cpp',
+            smoke_source_sha256=digest(root/'smoke-test/reproducible-main.cpp'),
+            expected_version_tag=version_tag,expected_git_commit=pin,
+            core_source_evidence_sha256={name:hashlib.sha256(data).hexdigest() for name,data in source_evidence.items()},
             dependencies=[dict(name=r.name,version=r.version,
                 input_fingerprint=regular(root/'Build/dependencies'/r.name/'evidence/input-fingerprint.txt').decode().strip(),
                 archives={relative:digest(prefixes[r.name]/relative) for relative in r.expected_archives})
@@ -308,16 +329,16 @@ def main():
             shutil.rmtree(stage)
         directory(stage/'include',create=True)
         directory(stage/'lib',create=True)
-        for source in sorted((checkout/'airdcpp').rglob('*')):
-            if 'modules' in source.relative_to(checkout/'airdcpp').parts:
+        for source in sorted(header_root.rglob('*')):
+            if 'modules' in source.relative_to(header_root).parts:
                 continue
             if source.suffix in ('.h','.inc'):
                 directory(source.parent)
-                write(stage/'include'/source.relative_to(checkout),regular(source))
+                write(stage/'include'/source.relative_to(staged_source),regular(source))
         write(stage/'lib/libairdcpp.a',regular(archive))
         write(output/'header-manifest.sha256',''.join(digest(p)+'  '+p.relative_to(stage/'include').as_posix()+'\n'
             for p in sorted((stage/'include').rglob('*')) if p.is_file()))
-        write(output/'controlled-static.cmake',controlled_targets(prefixes,iconv))
+        write(output/'controlled-static.cmake',controlled_targets(prefixes,iconv,version_tag,pin))
         run_case('core-only',(),'unresolved',tools,environment,sdk)
         run_case('full',CANDIDATES,'success',tools,environment,sdk)
         omissions = ['pass\tordinal\tlogical\tclassification\tbuild_exit\n']
