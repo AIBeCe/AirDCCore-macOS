@@ -1,6 +1,6 @@
 # Gate 6: Reproducible dependency inputs
 
-The recorded native dependency, Core, and force-loaded consumer capture passed its executed checks and stopped only at the then-absent report. Final acceptance is pending the whole-branch findings on declared adapter options and acquisition publication races, fresh acquisition/dependency proof after their fixes, and the final full-gate rerun. The criterion records below describe the captured evidence and do not override this pending status.
+Fresh post-review acquisition and a genuine confined all-eight refresh at code checkpoint 8bb5768 satisfy the twelve evidence-backed criteria below, including two ordinary dependency no-ops, Core, the real force-loaded consumer, scopes and closure. The capture refused only the then-pending report; this updated accepted report supplies that contract without relabeling the capture's exit 1. The final full-gate rerun with this tracked report and final report/delta review remain explicit integration gates.
 
 The canonical lock reconstructs eight isolated static prefixes. OpenSSL 3.5.8 is the reviewed LTS exception to earlier 3.6.4 discovery. The renewed physical closure matches ADR 0001: Core, BZip2, zlib, OpenSSL SSL/Crypto, miniupnpc, LevelDB, MaxMindDB, Snappy, then SDK Iconv. Boost is build-only. libc++ and libSystem are implicit Apple inputs; no framework or non-system dylib is required.
 
@@ -11,6 +11,8 @@ Core builds from a manifest-verified private tracked-file stage; original Source
 Retries are retained: the initial generator rewrote ignored Source while an underlying HashStore memcpy diagnostic also failed compilation; the native launcher hypothesis failed and was replaced by the narrow version COMMAND patch; the later NetworkUtil C++ VLA failure required the third patch target. Core attempts 0001 and 0002 retain failed build logs; 0003 retains a successful build before the current rerun. Failed dependency metadata, LevelDB probe/provenance and Boost relocation attempts are preserved with their original hashes. Original failed version.inc predecessor bytes were not available and are not reconstructed or mislabeled. Snappy/LevelDB GoogleTest omissions and their explicit installed-consumer compensation are recorded per component.
 
 The approved OpenSSL runtime defaults and their observed certificate/config descendants are intentional runtime strings, not build provenance. Raw logs, host paths and ignored evidence remain private; only normalized facts and evidence-relative digests are tracked here. This report proves ingredients and consumer behavior on the recorded host. It does not publish Dist, build an aggregate, classify collisions/coalescing, establish two-clean-build byte reproducibility, or establish actual execution on macOS 14. The feature worktree and ignored artifacts are preserved for review and Phase 7 handoff.
+
+Whole-branch findings have independent code-review PASS: exact bounded adapter options/name now fail closed before execution (111c75e); acquired content is verified across private clone/descriptors and exclusive publication, uncertain failures retain private forensic attempts rather than deleting unknown winners, and Git metadata validation spans fixed digest snapshots (ab293b2, 960bed8, 8bb5768); strict link normalization refuses top-level @response files that could hide physical inputs (b90253b). Fresh acquisition and native checks were captured after those fixes; earlier pre-fix evidence is retained, not substituted for current proof. Historical Gate 3/4 contracts are unchanged and replay their observed historical input bytes in a disposable fixture; that replay neither restores active forensic Source nor proves current native acceptance.
 
 ```json
 {
@@ -87,7 +89,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
       "evidence": [
         {
           "path": "Build/gate6/acquisition-validation.json",
-          "sha256": "ff7afe4442ebb1c7c93fa60941cac47440521c64c3f3fd61b48e776a56c40004"
+          "sha256": "dcf1f949cd60bd6339be348dcc983414a7e3ada0f7dc02f5d6f07d76d02b45c9"
         },
         {
           "path": "Build/gate6/acquisition.raw.log",
@@ -104,7 +106,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         },
         {
           "path": "Build/gate6/acquisition-validation.json",
-          "sha256": "ff7afe4442ebb1c7c93fa60941cac47440521c64c3f3fd61b48e776a56c40004"
+          "sha256": "dcf1f949cd60bd6339be348dcc983414a7e3ada0f7dc02f5d6f07d76d02b45c9"
         }
       ],
       "result": "PASS"
@@ -150,39 +152,39 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
       "evidence": [
         {
           "path": "Build/gate6/dependency-confinement.json",
-          "sha256": "1c1b76206d24743d4c5561f5ab2775bb81d0b273dd08cf8419070d297fc9215f"
+          "sha256": "32a6d7f14df5ce776e657bd61508cebb94a1441145acbe4aa095762ea4a83bd3"
         },
         {
           "path": "Build/dependencies/bzip2/evidence/adapter.log",
-          "sha256": "4717f4587c11b25270afccbd188583b62c456a10c2a38fab3df223e3a380fa41"
+          "sha256": "ce58aa49e502145e74483e14c93fb9f8eca5ca33355b6cf40871766a071415e5"
         },
         {
           "path": "Build/dependencies/zlib/evidence/adapter.log",
-          "sha256": "5fb14efa9c968338c1624b67a3d477867ab031114b3cae2556a73c0afc19b64e"
+          "sha256": "2fe403907bcd662431dc0a958f5dd62d3f8a9e4f24f49923ace0dbb1e4256f97"
         },
         {
           "path": "Build/dependencies/openssl/evidence/adapter.log",
-          "sha256": "b3abcecd885c0526cd7b1bc19e9db583e0cff058ab509f5195f18305e2be0a33"
+          "sha256": "4a8360e3762940ae9721058879d6645b7a19374e654590f491d39e6e201a1067"
         },
         {
           "path": "Build/dependencies/miniupnpc/evidence/adapter.log",
-          "sha256": "4f221d70f9082955f3ec2b70f4ddb46436522fc1de21f59a6b7a77d4bd0b4829"
+          "sha256": "ee861468347f1a9f3cd164bf9ea5520f2e819daf30b410a9c6a522665ce28ac9"
         },
         {
           "path": "Build/dependencies/libmaxminddb/evidence/adapter.log",
-          "sha256": "9e2c38d9bfb648b104fa97091ac99620299f27c8edd6c2ce1c3abae2fcd36fbe"
+          "sha256": "1c349ad725b0192564bfa4c5cf4d8bc95a82a8db728f6ef2f2129703962dbb68"
         },
         {
           "path": "Build/dependencies/snappy/evidence/adapter.log",
-          "sha256": "e83167e6008a92ca3728792386b9b0b9cc4d59bb113451fec1812ac89bee7e29"
+          "sha256": "dadd74359168440688bdf100f96e4bc376725069ace59512f62a72d6bc14a039"
         },
         {
           "path": "Build/dependencies/leveldb/evidence/adapter.log",
-          "sha256": "cbe29a679d6c77f26869a3608c978dbcf3c6b774161606e99f591ff3f6606cbe"
+          "sha256": "ca762bea0f8281a04bf791b588a744eb1d45ab895aa514e88c6e00f4e5818662"
         },
         {
           "path": "Build/dependencies/boost/evidence/adapter.log",
-          "sha256": "ee16450ac322bfc1e16b438ecfeaaf32bdd057974985a1fe4ec02523873fa608"
+          "sha256": "4b9a3c6a9d32f36ff5ec4a20b1dbc9a148c1a20440df4de111cfdf76bffc9da2"
         }
       ],
       "result": "PASS"
@@ -309,7 +311,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed headers/archive compress and decompress exact bytes",
           "evidence": {
             "path": "Build/dependencies/bzip2/evidence/adapter.log",
-            "sha256": "4717f4587c11b25270afccbd188583b62c456a10c2a38fab3df223e3a380fa41"
+            "sha256": "ce58aa49e502145e74483e14c93fb9f8eca5ca33355b6cf40871766a071415e5"
           },
           "id": "bzip2-compression-roundtrip",
           "purposes": [
@@ -345,7 +347,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Required deterministic upstream self-tests executed successfully",
           "evidence": {
             "path": "Build/dependencies/bzip2/evidence/adapter.log",
-            "sha256": "4717f4587c11b25270afccbd188583b62c456a10c2a38fab3df223e3a380fa41"
+            "sha256": "ce58aa49e502145e74483e14c93fb9f8eca5ca33355b6cf40871766a071415e5"
           },
           "id": "upstream-self-tests",
           "purposes": [
@@ -365,7 +367,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed headers/archive compress and decompress exact bytes",
           "evidence": {
             "path": "Build/dependencies/zlib/evidence/adapter.log",
-            "sha256": "5fb14efa9c968338c1624b67a3d477867ab031114b3cae2556a73c0afc19b64e"
+            "sha256": "2fe403907bcd662431dc0a958f5dd62d3f8a9e4f24f49923ace0dbb1e4256f97"
           },
           "id": "zlib-compression-roundtrip",
           "purposes": [
@@ -401,7 +403,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Required deterministic upstream self-tests executed successfully",
           "evidence": {
             "path": "Build/dependencies/zlib/evidence/adapter.log",
-            "sha256": "5fb14efa9c968338c1624b67a3d477867ab031114b3cae2556a73c0afc19b64e"
+            "sha256": "2fe403907bcd662431dc0a958f5dd62d3f8a9e4f24f49923ace0dbb1e4256f97"
           },
           "id": "upstream-self-tests",
           "purposes": [
@@ -422,7 +424,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed SSL/Crypto archives create a TLS context and compute SHA-256",
           "evidence": {
             "path": "Build/dependencies/openssl/evidence/adapter.log",
-            "sha256": "b3abcecd885c0526cd7b1bc19e9db583e0cff058ab509f5195f18305e2be0a33"
+            "sha256": "4a8360e3762940ae9721058879d6645b7a19374e654590f491d39e6e201a1067"
           },
           "id": "openssl-tls-context-and-sha256",
           "purposes": [
@@ -458,7 +460,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Required deterministic upstream self-tests executed successfully",
           "evidence": {
             "path": "Build/dependencies/openssl/evidence/adapter.log",
-            "sha256": "b3abcecd885c0526cd7b1bc19e9db583e0cff058ab509f5195f18305e2be0a33"
+            "sha256": "4a8360e3762940ae9721058879d6645b7a19374e654590f491d39e6e201a1067"
           },
           "id": "upstream-self-tests",
           "purposes": [
@@ -478,7 +480,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed headers/archive exercise the local parser/API without router or remote-network access",
           "evidence": {
             "path": "Build/dependencies/miniupnpc/evidence/adapter.log",
-            "sha256": "4f221d70f9082955f3ec2b70f4ddb46436522fc1de21f59a6b7a77d4bd0b4829"
+            "sha256": "ee861468347f1a9f3cd164bf9ea5520f2e819daf30b410a9c6a522665ce28ac9"
           },
           "id": "miniupnpc-parser",
           "purposes": [
@@ -514,7 +516,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Required deterministic upstream self-tests executed successfully",
           "evidence": {
             "path": "Build/dependencies/miniupnpc/evidence/adapter.log",
-            "sha256": "4f221d70f9082955f3ec2b70f4ddb46436522fc1de21f59a6b7a77d4bd0b4829"
+            "sha256": "ee861468347f1a9f3cd164bf9ea5520f2e819daf30b410a9c6a522665ce28ac9"
           },
           "id": "upstream-self-tests",
           "purposes": [
@@ -534,7 +536,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed headers/archive exercise the declared local MaxMindDB API contract",
           "evidence": {
             "path": "Build/dependencies/libmaxminddb/evidence/adapter.log",
-            "sha256": "9e2c38d9bfb648b104fa97091ac99620299f27c8edd6c2ce1c3abae2fcd36fbe"
+            "sha256": "1c349ad725b0192564bfa4c5cf4d8bc95a82a8db728f6ef2f2129703962dbb68"
           },
           "id": "maxminddb-api",
           "purposes": [
@@ -570,7 +572,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Required deterministic upstream self-tests executed successfully",
           "evidence": {
             "path": "Build/dependencies/libmaxminddb/evidence/adapter.log",
-            "sha256": "9e2c38d9bfb648b104fa97091ac99620299f27c8edd6c2ce1c3abae2fcd36fbe"
+            "sha256": "1c349ad725b0192564bfa4c5cf4d8bc95a82a8db728f6ef2f2129703962dbb68"
           },
           "id": "upstream-self-tests",
           "purposes": [
@@ -590,7 +592,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed Snappy CMake target resolves its accepted archive; compress/uncompress exact bytes round-trip",
           "evidence": {
             "path": "Build/dependencies/snappy/evidence/adapter.log",
-            "sha256": "e83167e6008a92ca3728792386b9b0b9cc4d59bb113451fec1812ac89bee7e29"
+            "sha256": "dadd74359168440688bdf100f96e4bc376725069ace59512f62a72d6bc14a039"
           },
           "id": "snappy-compression-roundtrip",
           "purposes": [
@@ -629,7 +631,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "disabled_option": "-DSNAPPY_BUILD_TESTS=OFF",
           "evidence": {
             "path": "Build/dependencies/snappy/evidence/expanded-options.json",
-            "sha256": "bf7285861e404598f573e47f7b55027cddb465430c75445e4dd7fabc0bfe5be4"
+            "sha256": "b6dfdf8f2949282c8493dbd8b40f6bfe15709eed4ee7da8e145038d0438ffc48"
           },
           "id": "googletest-omission",
           "purposes": [],
@@ -648,7 +650,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed LevelDB target reaches exact accepted Snappy archive; 128-KiB compressed database Put/Get verifies persistent data",
           "evidence": {
             "path": "Build/dependencies/leveldb/evidence/adapter.log",
-            "sha256": "cbe29a679d6c77f26869a3608c978dbcf3c6b774161606e99f591ff3f6606cbe"
+            "sha256": "ca762bea0f8281a04bf791b588a744eb1d45ab895aa514e88c6e00f4e5818662"
           },
           "id": "leveldb-snappy-persistent-roundtrip",
           "purposes": [
@@ -687,7 +689,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "disabled_option": "-DLEVELDB_BUILD_TESTS=OFF",
           "evidence": {
             "path": "Build/dependencies/leveldb/evidence/expanded-options.json",
-            "sha256": "78a3c972bc3f0d683e9b2287ff3558cc24770d1e2ec0abe09d6fa638145cdcea"
+            "sha256": "662c2f8f6601e787a73066060a56b9646ba9a1e0d14125445183c54b92324a06"
           },
           "id": "googletest-omission",
           "purposes": [],
@@ -712,7 +714,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Installed regex target matches/rejects values and thread target executes and joins; imported archives remain prefix-bound",
           "evidence": {
             "path": "Build/dependencies/boost/evidence/adapter.log",
-            "sha256": "ee16450ac322bfc1e16b438ecfeaaf32bdd057974985a1fe4ec02523873fa608"
+            "sha256": "4b9a3c6a9d32f36ff5ec4a20b1dbc9a148c1a20440df4de111cfdf76bffc9da2"
           },
           "id": "boost-regex-and-thread",
           "purposes": [
@@ -754,7 +756,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
           "description": "Pinned Boost regex/thread bootstrap and static build; this record does not claim an upstream test suite ran",
           "evidence": {
             "path": "Build/dependencies/boost/evidence/adapter.log",
-            "sha256": "ee16450ac322bfc1e16b438ecfeaaf32bdd057974985a1fe4ec02523873fa608"
+            "sha256": "4b9a3c6a9d32f36ff5ec4a20b1dbc9a148c1a20440df4de111cfdf76bffc9da2"
           },
           "id": "locked-regex-thread-build",
           "purposes": [
@@ -809,6 +811,22 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
       "usr/lib/libiconv.2.tbd"
     ]
   ],
+  "execution_capture": {
+    "acquisition": {
+      "path": "Build/gate6/acquisition-validation.json",
+      "sha256": "dcf1f949cd60bd6339be348dcc983414a7e3ada0f7dc02f5d6f07d76d02b45c9"
+    },
+    "code_checkpoint": "8bb5768cc59d734aaab0947d1dc51a81f669c40c",
+    "evidence": {
+      "path": "Build/gate6/capture-validation.json",
+      "sha256": "daa38007b245bc546ae10754d6774cafecdbeee47c7399588e0e46a221694649"
+    },
+    "final_full_gate": "coordinator rerun required after report checkpoint",
+    "raw_log": {
+      "path": "Build/gate6/build-refresh.raw.log",
+      "sha256": "a0e8e0da1196f6652d30f0e445ecce6faec48eb32344919ea70cc0ab982eda71"
+    }
+  },
   "host": {
     "architecture": "arm64",
     "deployment_target": "14.0",
@@ -820,7 +838,8 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
     "Native execution on recorded macOS 26.5.1 does not prove actual runtime behavior on macOS 14",
     "Deployment policy is supported by recorded flags and every available member/executable build-version command; unavailable member metadata is not invented",
     "Original failed generated version.inc predecessor bytes are unavailable; retained forensic bytes are not claimed to be its immediate predecessor",
-    "Final whole-branch review and final full-gate rerun follow this tracked report checkpoint"
+    "Uncertain failed private acquisition attempts are retained for forensic inspection; cleanup cannot delete an unverified publication winner",
+    "Final whole-branch report/delta review and final full-gate rerun follow this tracked report checkpoint"
   ],
   "lock_sha256": "d4a4b7a5f7bdc7f6a7e9076db9fa4113a5771c2000c72abf06b70c164230cddd",
   "omissions": [
@@ -848,7 +867,7 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
   },
   "retry_history": [
     {
-      "attempt_count": 4,
+      "attempt_count": 5,
       "component": "bzip2",
       "preserved_manifests": [
         {
@@ -866,11 +885,15 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/bzip2/evidence/attempts/0004/sha256.txt",
           "sha256": "e140fb10d59bf167cd48d3a3ae0ae8eb65fc9ff1cbd95530f1b3f1f2d07868b7"
+        },
+        {
+          "path": "Build/dependencies/bzip2/evidence/attempts/0005/sha256.txt",
+          "sha256": "a2773d9eb5cfc82afaebf083cf2cca2f63e66b99a5f5c8568d84f9b4dcfb9ae5"
         }
       ]
     },
     {
-      "attempt_count": 4,
+      "attempt_count": 5,
       "component": "zlib",
       "preserved_manifests": [
         {
@@ -888,11 +911,15 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/zlib/evidence/attempts/0004/sha256.txt",
           "sha256": "c0c42484c198b69c8d832a796a48328c8c294577b1f6ac15c7765b6385ca381b"
+        },
+        {
+          "path": "Build/dependencies/zlib/evidence/attempts/0005/sha256.txt",
+          "sha256": "46675720c57c391bc7ee1ac93b8a744544e3457aef6ad49357ffc5eca275d3bf"
         }
       ]
     },
     {
-      "attempt_count": 4,
+      "attempt_count": 5,
       "component": "openssl",
       "preserved_manifests": [
         {
@@ -910,11 +937,15 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/openssl/evidence/attempts/0004/sha256.txt",
           "sha256": "77ba51fcb09b329f03dfc1eb52f0ac06a45f076a2005472e073ba1b0c18affad"
+        },
+        {
+          "path": "Build/dependencies/openssl/evidence/attempts/0005/sha256.txt",
+          "sha256": "1b4a7f1b67561a73ad694b3385c23a29a345e6af697781f970dbc3f9067bec67"
         }
       ]
     },
     {
-      "attempt_count": 4,
+      "attempt_count": 5,
       "component": "miniupnpc",
       "preserved_manifests": [
         {
@@ -932,11 +963,15 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/miniupnpc/evidence/attempts/0004/sha256.txt",
           "sha256": "06d1bc244750dcbf4aa863e7e13428c6f17967ccfbe3566a7108ef559e327d21"
+        },
+        {
+          "path": "Build/dependencies/miniupnpc/evidence/attempts/0005/sha256.txt",
+          "sha256": "12c268f9b03639d652f23335735305f4198447cc46a212c4f4f72cfa97b6dce8"
         }
       ]
     },
     {
-      "attempt_count": 4,
+      "attempt_count": 5,
       "component": "libmaxminddb",
       "preserved_manifests": [
         {
@@ -954,11 +989,15 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/libmaxminddb/evidence/attempts/0004/sha256.txt",
           "sha256": "4001cd942b922c94631419e2a8d451901de211059a493b6ac484347381ac19c9"
+        },
+        {
+          "path": "Build/dependencies/libmaxminddb/evidence/attempts/0005/sha256.txt",
+          "sha256": "7564a1b633b25da0443158474ba7cf70ab12079e1042b5182b7ffe1f0f03c060"
         }
       ]
     },
     {
-      "attempt_count": 4,
+      "attempt_count": 5,
       "component": "snappy",
       "preserved_manifests": [
         {
@@ -976,11 +1015,15 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/snappy/evidence/attempts/0004/sha256.txt",
           "sha256": "9530b4471deb2d658e60603dace8492d44f9c96e7a254e7708d20bbcc67c9404"
+        },
+        {
+          "path": "Build/dependencies/snappy/evidence/attempts/0005/sha256.txt",
+          "sha256": "a8afd2956c20658ccfaa7342112bce6dff64b78c1f2304055f968d8e9add4977"
         }
       ]
     },
     {
-      "attempt_count": 3,
+      "attempt_count": 4,
       "component": "leveldb",
       "preserved_manifests": [
         {
@@ -994,11 +1037,15 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/leveldb/evidence/attempts/0003/sha256.txt",
           "sha256": "a696560140d18df653cd4fb8ed634f9176f95dd5a245c1bce479a10356fd43da"
+        },
+        {
+          "path": "Build/dependencies/leveldb/evidence/attempts/0004/sha256.txt",
+          "sha256": "050cd30244f7e2c6cf7571fe55cad515bff2d7634b6c63d5b2f1cc8dd21bc859"
         }
       ]
     },
     {
-      "attempt_count": 3,
+      "attempt_count": 4,
       "component": "boost",
       "preserved_manifests": [
         {
@@ -1012,6 +1059,10 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         {
           "path": "Build/dependencies/boost/evidence/attempts/0003/sha256.txt",
           "sha256": "af5ba4e8a51d4409cd9cac382fb2210b99745d3fc77850bcdb591a12dbd893e7"
+        },
+        {
+          "path": "Build/dependencies/boost/evidence/attempts/0004/sha256.txt",
+          "sha256": "b7da8657cfebfa6eccc62c69a48b08f779b7fdd6172a5b2c8641e94ff4fdba73"
         }
       ]
     },
@@ -1041,10 +1092,83 @@ The approved OpenSSL runtime defaults and their observed certificate/config desc
         "path": "Build/airdcpp-core/reproducible-release/attempts/0003/prior-output-manifest.json",
         "sha256": "402ae64152764fd44941d5a936ba5ec2233000ccc01e905ee9fa7984dd9399ff"
       }
+    },
+    {
+      "attempt": "0004",
+      "build_exit": "0",
+      "component": "Core",
+      "evidence": {
+        "path": "Build/airdcpp-core/reproducible-release/attempts/0004/prior-output-manifest.json",
+        "sha256": "a11c23c140691314d910ae56a9876aad67fd9633d40676623c9d32094c47bfb2"
+      }
+    },
+    {
+      "attempt": "0001",
+      "component": "consumer",
+      "evidence": {
+        "path": "Build/airdcpp-core/reproducible-link-interface/history/0001/sha256.txt",
+        "sha256": "78d80d4a72c655ee62f3cb879730f2985c34670b6a138be4984fcc6ca3c167b2"
+      },
+      "runtime_exit": "0"
+    },
+    {
+      "attempt": "0002",
+      "component": "consumer",
+      "evidence": {
+        "path": "Build/airdcpp-core/reproducible-link-interface/history/0002/sha256.txt",
+        "sha256": "534dd373304053e63575364c590fa2c25aed8d2f68159f9ce9cdec8b633cc781"
+      },
+      "runtime_exit": "0"
+    },
+    {
+      "attempt": "197fb1015162dc6ab5eade953cda3c0f7127d871c7a85eacf9d9bbdd40b71243",
+      "component": "confinement",
+      "evidence": {
+        "path": "Build/gate6/confinement-history/197fb1015162dc6ab5eade953cda3c0f7127d871c7a85eacf9d9bbdd40b71243.json",
+        "sha256": "197fb1015162dc6ab5eade953cda3c0f7127d871c7a85eacf9d9bbdd40b71243"
+      },
+      "result": "superseded attestation; not current proof"
+    },
+    {
+      "attempt": "1c1b76206d24743d4c5561f5ab2775bb81d0b273dd08cf8419070d297fc9215f",
+      "component": "confinement",
+      "evidence": {
+        "path": "Build/gate6/confinement-history/1c1b76206d24743d4c5561f5ab2775bb81d0b273dd08cf8419070d297fc9215f.json",
+        "sha256": "1c1b76206d24743d4c5561f5ab2775bb81d0b273dd08cf8419070d297fc9215f"
+      },
+      "result": "superseded attestation; not current proof"
+    }
+  ],
+  "review_history": [
+    {
+      "commits": [
+        "111c75e"
+      ],
+      "correction": "Require exact supported ordered arrays and component adapter name before dispatch; no recorded but ignored option is accepted",
+      "finding": "I1 bounded adapter options",
+      "result": "CODE PASS"
+    },
+    {
+      "commits": [
+        "ab293b2",
+        "960bed8",
+        "8bb5768"
+      ],
+      "correction": "Verify private clone content and descriptor identity through exclusive publication; retain uncertain failed private attempts, never delete unknown winners; validate Git metadata across fixed digest snapshots",
+      "finding": "I2 acquisition publication content and ownership",
+      "result": "CODE PASS"
+    },
+    {
+      "commits": [
+        "b90253b"
+      ],
+      "correction": "Strict physical link normalization refuses top-level @response-file arguments rather than ignoring hidden link inputs",
+      "finding": "I3 strict response-file closure",
+      "result": "CODE PASS"
     }
   ],
   "schema_version": 1,
-  "status": "pending",
+  "status": "accepted",
   "system_inputs": [
     "explicit SDK Iconv",
     "implicit libc++",

@@ -12,6 +12,8 @@ Archive bytes are checked against locked SHA-256 values; Git sources are checked
 
 Verified downloads live in `Dependencies/.downloads`; archive names bind component/version/checksum, and Git bundles bind commits. `--offline` fails on missing or corrupt input without contacting the network. Do not replace a checksum or edit extracted source to bypass a failure. Adapters apply reviewed tracked patches only to private build copies.
 
+Acquisition verifies staged and privately cloned content against its declared digest before and after exclusive publication, retaining bound directory/file identities. Git safety validation spans fixed metadata/content snapshots, so an unsafe later observation cannot replace an earlier digest-bound check. Cleanup becomes eligible only after the private clone's initial content and ownership checks succeed; uncertain failed private publication attempts remain for forensic inspection, and unknown winners must not be deleted. Preserve those attempts and diagnostics before any explicit operator cleanup.
+
 Reproducible Core likewise uses a manifest-verified private tracked-file stage, not the original checkout. Its separately tracked policy binds one exact three-file patch, deterministic pinned-epoch/count-zero version generation, and staged-header provenance. Failed original generated `version.inc` bytes remain forensic evidence; they must not be guessed or restored to make historical contracts pass.
 
 The acquisition gate requires `Dependencies`, `Build`, and `Dist` initially absent:

@@ -153,6 +153,8 @@ scripts/build --build-dependencies
 
 The command validates all sources before building, then invokes focused adapters in lock order. It builds out of tree, runs the configured upstream validation for each component, validates the staged prefix, and atomically replaces only that component's accepted prefix. A component whose inputs and accepted evidence still match is an idempotent no-op.
 
+The current bounded adapters require exact supported ordered configure/build/install arrays and the declared component/adapter mapping before acquisition or build work. A syntactically valid changed lock that is not implemented by the adapter fails closed; recorded options cannot substitute for actual execution of them.
+
 ### 7.3 Reproducible Core build
 
 Phase 6 adds:
@@ -190,6 +192,8 @@ Archive inspection occurs before extraction. Acquisition rejects:
 
 Interrupted or failed acquisition leaves the last accepted cache and source tree untouched. Existing source is never silently repaired: an unexpected file, missing file, changed byte, changed link, or wrong Git identity causes refusal and directs the operator to preserve or remove the drift explicitly.
 
+Publication verifies the staged digest, privately cloned content and bound descriptor/name identity before and after exclusive publication. Git validation spans fixed metadata/content digest snapshots. Initial private-clone content and ownership checks must succeed before cleanup is eligible; uncertain failed private attempts remain for forensics, and cleanup never claims an unknown publication winner.
+
 ## 9. Static build policy
 
 Every dependency build uses Apple Clang, Release configuration, `arm64`, macOS deployment target `14.0`, and static linkage. C++ dependencies use libc++ through the Apple driver defaults. Shared-library targets, tests requiring mutable network access, examples, command-line applications, and benchmarks are disabled unless one is required to validate the library.
@@ -222,6 +226,8 @@ The approved version contract uses pinned commit epoch `1774518197`, tag `0.0.0`
 Host executable paths may point to Homebrew. Non-system compile and link inputs may not. Apple SDK and Xcode paths are allowed and classified separately.
 
 The external consumer repeats Gate 4's force-loaded Core experiment using the reconstructed static inputs. It must compile, link, run, expose the pinned Core identity, and contain no non-system dylib load command. The effective physical link interface is compared with ADR 0001. A new component, Boost archive, Apple framework, or other system input blocks Gate 6 until the ADR is reviewed.
+
+Strict Phase 6 physical-link normalization refuses top-level `@response-file` arguments that would conceal input paths; historical non-strict modes remain unchanged.
 
 OpenSSL 3.5.8 evidence is new evidence. The prior 3.6.4 command, hashes, and runtime result remain historical and are never overwritten.
 

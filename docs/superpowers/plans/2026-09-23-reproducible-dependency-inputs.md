@@ -25,6 +25,8 @@
 
 ## Review Focus
 
+**Execution record:** Tasks 1–9 are implemented, regression-verified and independently reviewed. Preserved task reports/ledger record their actual RED/GREEN history and later native corrections; the checkboxes below summarize completion rather than claim the initial proposed lock/commands stayed unchanged. Post-review code checkpoint `8bb5768` passed fresh online/offline/no-op acquisition and genuine confined all-eight/native Core/consumer checks. The capture refused only the then-pending report; the refreshed accepted report passes normal/live contracts. Final full-gate zero exit and final report/delta review remain required before integration.
+
 - Archive paths that differ only by Unicode spelling or case must be rejected before extraction; Task 2 pins case-fold and NFC collision tests.
 - A cache or destination swapped to a symlink between validation and publication must fail without touching the outside target; Task 2 pins race-wrapper tests.
 - An interrupted or failed component rebuild must leave the prior accepted prefix byte-for-byte unchanged and retain the failed evidence; Task 3 pins publication-failure tests.
@@ -46,7 +48,7 @@
 - Produces: `load_lock(path: Path) -> DependencyLock`, `canonical_bytes(lock: DependencyLock) -> bytes`, `topological_records(lock: DependencyLock) -> tuple[DependencyRecord, ...]`, and CLI commands `validate`, `record`, and `fingerprint`.
 - `record --name NAME --field FIELD` prints exactly one scalar or one JSON array and never emits shell syntax.
 
-- [ ] **Step 1: Write lock validation tests that fail before the helper exists.**
+- [x] **Step 1: Write lock validation tests that fail before the helper exists.**
 
   Create `tests/dependency_lock_test.py` with `unittest` cases for the accepted tracked lock and for duplicate keys, non-canonical bytes, schema versions other than `1`, unknown fields, duplicate names, invalid roles, malformed SHA-256 values, non-HTTPS archive URLs, non-full Git commits, undeclared dependencies, cycles, unsafe adapter names/options, unknown substitution tokens, invalid expected paths, and a patch whose tracked SHA-256 differs. Include this exact duplicate-key case:
 
@@ -57,13 +59,13 @@
       self.assertIn("duplicate JSON key: schema_version", result.stderr)
   ```
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk python3 tests/dependency_lock_test.py`
 
   Expected: FAIL because `scripts/lib/dependency_lock.py` and `config/dependencies.lock` do not exist.
 
-- [ ] **Step 3: Implement strict typed parsing and canonical serialization.**
+- [x] **Step 3: Implement strict typed parsing and canonical serialization.**
 
   Define immutable records and duplicate-key rejection in `scripts/lib/dependency_lock.py`:
 
@@ -111,7 +113,7 @@
 
   Permit substitutions only for `@SOURCE@`, `@BUILD@`, `@STAGE@`, `@JOBS@`, `@EPOCH@`, `@PREFIX:snappy@`, and `@SDKROOT@`. Reject NUL, newline, shell metacharacter fields, absolute expected-output paths, and `..` path components. Require dependency records to already be in topological order as well as cycle-free.
 
-- [ ] **Step 4: Add the exact canonical lock.**
+- [x] **Step 4: Add the exact canonical lock.**
 
   Serialize schema version `1` and these records in this exact order. Archive `tree_manifest_sha256` values use canonical UTF-8 JSON-lines entries sorted by UTF-8 path bytes: directory `{path,type}`, file `{executable,path,sha256,type}`, and symlink `{path,target,type}`. Git tree values hash the exact `git ls-tree -r --full-tree <commit>` bytes.
 
@@ -126,9 +128,9 @@
   | `leveldb` 1.23 | aggregate | `https://github.com/google/leveldb.git`, commit `99b3c03b3284f5886f9ef9a4ef703d57373e61be`, tag `1.23` | absent | `b91ddef6557cac0d83ac0938f6ef3f4d70effa9eed32f2691950fd6d103a0c0d` | 1614113677 | `BSD-3-Clause`, `LICENSE` |
   | `boost` 1.90.0 | build-only | `https://archives.boost.io/release/1.90.0/source/boost_1_90_0.tar.bz2` | `49551aff3b22cbc5c5a9ed3dbc92f0e23ea50a0f7325b0d198b705e8ee3fc305` | `3b5de250b4466b2c655e1b2e00c9d0fa43bd33d4cb219f9bc2bec412d8bc27e2` | 1764771748 | `BSL-1.0`, `LICENSE_1_0.txt` |
 
-  Record dependencies as `leveldb -> [snappy]` and all others as empty. Record patches as empty arrays. Set every platform contract to architecture `arm64`, deployment target `14.0`, build type `Release`, C++ runtime `libc++`, and linkage `static`.
+  Record dependencies as `leveldb -> [snappy]` and all others as empty. Initially record patches as empty arrays; the approved native Boost relocation correction later adds its exact tracked build-copy patch/hash, while other dependency patch arrays remain empty. Set every platform contract to architecture `arm64`, deployment target `14.0`, build type `Release`, C++ runtime `libc++`, and linkage `static`.
 
-- [ ] **Step 5: Record complete ordered adapter options and outputs.**
+- [x] **Step 5: Record complete ordered adapter options and outputs.**
 
   Use the following lock content; token replacement is performed as argument substitution, never through a shell:
 
@@ -143,11 +145,11 @@
 
   Every record forbids `**/*.dylib`, `**/*.so`, `**/*.so.*`, and `**/*.la`.
 
-- [ ] **Step 6: Ignore reconstructed data without broadening tracked-source exclusions.**
+- [x] **Step 6: Ignore reconstructed data without broadening tracked-source exclusions.**
 
   Add only `/Dependencies/` to `.gitignore`; retain the existing `/Build/` and `/Dist/` rules and do not ignore lock files, patches, reports, or tests.
 
-- [ ] **Step 7: Run GREEN and canonical-byte checks.**
+- [x] **Step 7: Run GREEN and canonical-byte checks.**
 
   Run:
 
@@ -159,7 +161,7 @@
 
   Expected: tests print `OK`, validation prints the lock fingerprint, and `git diff --check` is silent.
 
-- [ ] **Step 8: Commit checkpoint 1A.**
+- [x] **Step 8: Commit checkpoint 1A.**
 
   ```sh
   rtk git add .gitignore config/dependencies.lock scripts/lib/dependency_lock.py tests/dependency_lock_test.py
@@ -180,19 +182,19 @@
 - Produces: `acquire_all(project_root: Path, lock: DependencyLock, offline: bool) -> None`, `inspect_archive(archive: Path, record: DependencyRecord) -> ArchivePlan`, `tree_manifest(root: Path) -> bytes`, and `scripts/update --dependencies [--offline]`.
 - Accepted paths: cache `Dependencies/.downloads/<name>-<version>-<sha12>.<suffix>` and source `Dependencies/<name>`.
 
-- [ ] **Step 1: Write failing acquisition safety tests.**
+- [x] **Step 1: Write failing acquisition safety tests.**
 
   Generate tiny tar, tar.gz, tar.bz2, and local Git fixtures inside each test temporary directory. Test checksum-before-open ordering, absolute/traversal names, duplicate normalized names, regular-file/directory aliasing, device/FIFO entries, escaping hard/symbolic links, two top-level roots, case-fold collisions, NFC-equivalent names, file-count limits, license absence, source-tree hash mismatch, Git wrong commit, Git dirty/untracked content, interrupted downloads, offline cache reuse, idempotent no-op, and drift refusal.
 
   Add a race test that replaces `.downloads` or the destination with a symlink immediately before `os.replace`; assert the outside marker remains unchanged and stderr contains `path identity changed before publication`.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk python3 tests/dependency_acquisition_test.py`
 
   Expected: FAIL because the acquisition module and update mode do not exist.
 
-- [ ] **Step 3: Implement path ownership and safe archive inspection.**
+- [x] **Step 3: Implement path ownership and safe archive inspection.**
 
   In `dependency_acquire.py`, open project-controlled directories with `lstat`, store `(st_dev, st_ino)`, and recheck immediately before every rename. Parse tar members before extraction and materialize entries yourself rather than calling `tar`:
 
@@ -209,15 +211,15 @@
 
   Reject non-regular/directory/symlink/hard-link types, normalized duplicates, `casefold()` or NFC collisions, unsafe link targets, and more than 100,000 members. Extract into `Dependencies/.staging-<random>`, strip the single declared top-level directory, normalize staging mtimes to `source_date_epoch`; require published regular-file and symlink mtimes to retain that epoch; populated-directory mtimes may reflect native publication. Compute the canonical tree manifest before publication.
 
-- [ ] **Step 4: Implement checksum-verified archive download and offline reuse.**
+- [x] **Step 4: Implement checksum-verified archive download and offline reuse.**
 
   Stream HTTPS bytes through SHA-256 into a cache sibling temporary file, `fsync` it, compare the exact digest, and atomically rename it. Never send credentials or inherit proxy values into evidence. If a correct cache exists, do not access the network. In `--offline` mode, report every missing cache in lock order and perform no partial extraction.
 
-- [ ] **Step 5: Implement immutable Git acquisition without submodules.**
+- [x] **Step 5: Implement immutable Git acquisition without submodules.**
 
   Initialize a temporary repository, set the exact origin, fetch only the full pinned commit, detach it, disable recursive submodules, and verify both commit and `git ls-tree -r --full-tree` hash. Reject any checked-out gitlink whose path is needed by the adapter; Snappy and LevelDB tests/benchmarks stay disabled, so their declared gitlinks remain uninitialized and excluded from the published filesystem tree. Reject tracked, staged, untracked, and initialized-submodule drift on reuse.
 
-- [ ] **Step 6: Add the update entry point without changing no-argument behavior.**
+- [x] **Step 6: Add the update entry point without changing no-argument behavior.**
 
   Parse only these forms in `scripts/update`:
 
@@ -232,11 +234,11 @@
 
   Move the existing no-argument body verbatim to `scripts/lib/update_core.sh` and keep its arguments, diagnostics, and exit statuses unchanged.
 
-- [ ] **Step 7: Add the opt-in live acquisition gate.**
+- [x] **Step 7: Add the opt-in live acquisition gate.**
 
   `tests/gate6_dependency_acquisition_test.sh` must skip unless `AIRDCCORE_RUN_DEPENDENCY_NETWORK_TESTS=1`, require an initially absent real `Dependencies`, run online acquisition, capture source/cache fingerprints, remove only validated extracted component directories, run `scripts/update --dependencies --offline`, and compare source/cache fingerprints, regular-file and symlink mtimes, and cache mtimes across online and offline reconstruction. Then run offline acquisition again and require the complete filesystem snapshot, including every directory and `.git` metadata, to remain unchanged. It must verify licenses, exact commits/checksums/tree manifests, absence of `Build`/`Dist`, and `git ls-files Dependencies Build Dist` is empty.
 
-- [ ] **Step 8: Run GREEN and the Phase 1 regression for update.**
+- [x] **Step 8: Run GREEN and the Phase 1 regression for update.**
 
   ```sh
   rtk python3 tests/dependency_acquisition_test.py
@@ -247,7 +249,7 @@
 
   Expected: all pass without network.
 
-- [ ] **Step 9: Commit checkpoint 1B.**
+- [x] **Step 9: Commit checkpoint 1B.**
 
   ```sh
   rtk git add scripts/update scripts/lib/update_core.sh scripts/lib/dependency_acquire.py tests/dependency_acquisition_test.py tests/gate6_dependency_acquisition_test.sh
@@ -267,17 +269,17 @@
 - Produces: `build_all(project_root: Path, lock: DependencyLock) -> None`, `validate_prefix(record, prefix, allowed_roots) -> PrefixReport`, `scripts/build --build-dependencies`, and adapter process contract `adapter SOURCE BUILD STAGE JOBS EPOCH [DEPENDENCY_PREFIX ...]`.
 - Evidence root: `Build/dependencies/<name>/evidence`; accepted prefix: `Build/prefix/<name>`.
 
-- [ ] **Step 1: Write failing orchestration and validator tests.**
+- [x] **Step 1: Write failing orchestration and validator tests.**
 
   Use fake adapters and tiny real ARM64 archives to test topological order, exact argv/token expansion, allowlisted environment, no-op fingerprint reuse, failed evidence preservation, sequential `attempts/0001`, atomic prefix replacement, prior-prefix preservation on failure, cross-prefix writes, forbidden shared output, missing expected output, unsafe links, foreign/non-archive files, wrong architecture, source/home/Homebrew string leakage, malformed package metadata, and a symlink-swap publication race.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk python3 tests/dependency_build_orchestration_test.py`
 
   Expected: FAIL because the orchestrator and prefix validator do not exist.
 
-- [ ] **Step 3: Implement deterministic orchestration and adapter invocation.**
+- [x] **Step 3: Implement deterministic orchestration and adapter invocation.**
 
   Build one record at a time in lock order. Expand lock tokens as array elements, never as shell text. Supply only `PATH`, `HOME` set to an empty private build directory, `TMPDIR` below the component build root, `SOURCE_DATE_EPOCH`, `ZERO_AR_DATE=1`, `SDKROOT`, `MACOSX_DEPLOYMENT_TARGET=14.0`, `CC`, `CXX`, `AR`, `RANLIB`, and locale `LC_ALL=C`/`LANG=C`. Resolve Apple tools with `xcrun --find` before the build; host CMake/Ninja/Perl/Make paths may be Homebrew and must be inventoried.
 
@@ -291,15 +293,15 @@
       subprocess.run(argv, env=env, check=True)
   ```
 
-- [ ] **Step 4: Implement attempt and acceptance fingerprints.**
+- [x] **Step 4: Implement attempt and acceptance fingerprints.**
 
   The input fingerprint hashes canonical lock bytes, source identity, adapter bytes, ordered dependency-prefix manifests, tool inventory, and SDK version. A matching accepted evidence fingerprint plus successful revalidation is a no-op. Before retry, copy every existing evidence file to the next immutable attempt directory and write `sha256.txt`; never overwrite historical evidence.
 
-- [ ] **Step 5: Implement strict component-prefix validation.**
+- [x] **Step 5: Implement strict component-prefix validation.**
 
   Require declared files; reject undeclared top-level roots, forbidden globs, absolute/escaping links, and dylibs. For every archive, use `ar -t`, extract to a private inspection directory, require each Mach-O object to report exactly `arm64` with `lipo -archs`, inventory `nm -gU`/`nm -u`, inspect build versions where present, and run `strings`. Normalize manifests to `$PREFIX`, `$SOURCE`, and `$BUILD`; reject the real project root, source/build roots, user home, `/opt/homebrew`, `/usr/local/Cellar`, and `Cellar/` in installed files and metadata.
 
-- [ ] **Step 6: Add the build entry point.**
+- [x] **Step 6: Add the build entry point.**
 
   Extend the existing one-mode parser without changing prior modes:
 
@@ -310,7 +312,7 @@
 
   Update the usage string to list the three existing modes plus the new mode.
 
-- [ ] **Step 7: Run GREEN and entry-point regressions.**
+- [x] **Step 7: Run GREEN and entry-point regressions.**
 
   ```sh
   rtk python3 tests/dependency_build_orchestration_test.py
@@ -320,7 +322,7 @@
   rtk git diff --check
   ```
 
-- [ ] **Step 8: Commit checkpoint 1C.**
+- [x] **Step 8: Commit checkpoint 1C.**
 
   ```sh
   rtk git add scripts/build scripts/lib/dependency_build.py scripts/lib/dependency_prefix.py tests/dependency_build_orchestration_test.py
@@ -338,25 +340,25 @@
 - Consumes: Task 3 adapter argv and staging-prefix contract.
 - Produces: BZip2 and zlib accepted inputs matching the Task 1 expected paths, plus installed-header external compile/link/run evidence.
 
-- [ ] **Step 1: Write failing adapter contract tests.**
+- [x] **Step 1: Write failing adapter contract tests.**
 
   Use fixture projects and fake `make`, `cmake`, `ninja`, compiler, and archive tools. Assert exact argument order, `-arch arm64`, `-mmacosx-version-min=14.0`, static-only options, out-of-tree zlib build, BZip2 `make check`, zlib `ctest --test-dir`, declared install files, and nonzero propagation before publication.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk ./tests/dependency_leaf_c_adapters_test.sh`
 
   Expected: FAIL because both adapter scripts are absent.
 
-- [ ] **Step 3: Implement BZip2 without upstream install-side binaries.**
+- [x] **Step 3: Implement BZip2 without upstream install-side binaries.**
 
   Run `make libbz2.a` and `make check` with the lock’s exact variables. Copy only `bzlib.h`, `libbz2.a`, and `LICENSE` into the staging prefix. Compile and run a small installed-only program that compresses and decompresses `AirDCCore` with `BZ2_bzBuffToBuffCompress` and `BZ2_bzBuffToBuffDecompress`.
 
-- [ ] **Step 4: Implement zlib with CMake.**
+- [x] **Step 4: Implement zlib with CMake.**
 
   Configure from source into the supplied build directory with the lock arguments, build `zlibstatic`, run CTest, and install into staging. Compile and run an installed-only program that uses `compress2` and `uncompress` and links the exact staged `lib/libz.a`.
 
-- [ ] **Step 5: Run GREEN plus orchestrator tests.**
+- [x] **Step 5: Run GREEN plus orchestrator tests.**
 
   ```sh
   rtk ./tests/dependency_leaf_c_adapters_test.sh
@@ -364,7 +366,7 @@
   rtk git diff --check
   ```
 
-- [ ] **Step 6: Commit checkpoint 2A.**
+- [x] **Step 6: Commit checkpoint 2A.**
 
   ```sh
   rtk git add scripts/lib/dependencies/build_bzip2.sh scripts/lib/dependencies/build_zlib.sh tests/dependency_leaf_c_adapters_test.sh
@@ -383,23 +385,23 @@
 - Consumes: Task 3 adapter contract and Task 1 lock options.
 - Produces: static OpenSSL SSL/Crypto, miniupnpc, and MaxMindDB component prefixes; OpenSSL evidence is explicitly version `3.5.8` and never overwrites Gate 4’s `3.6.4` evidence.
 
-- [ ] **Step 1: Write failing exact-command and installed-consumer tests.**
+- [x] **Step 1: Write failing exact-command and installed-consumer tests.**
 
   Assert OpenSSL uses `perl Configure darwin64-arm64-cc`, `no-shared`, `no-pinshared`, runs `make test`, and installs with `install_dev`; miniupnpc sets static ON/shared OFF/tests ON/sample OFF; MaxMindDB sets shared OFF/tests ON/binaries OFF/install ON. Assert each adapter runs its installed-only consumer and never reads `/opt/homebrew` headers or libraries.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk ./tests/dependency_leaf_network_adapters_test.sh`
 
-- [ ] **Step 3: Implement the OpenSSL adapter.**
+- [x] **Step 3: Implement the OpenSSL adapter.**
 
   Configure in a copied private source worktree because OpenSSL’s build is in-tree, while leaving `Dependencies/openssl` immutable. Apply no patch. Build with the lock’s job option, run `make test`, run `make install_dev`, and delete nothing from staging after installation. The installed-only consumer must initialize `OPENSSL_init_ssl`, create/free `SSL_CTX`, compute a SHA-256 digest through EVP, and link exact `libssl.a` then `libcrypto.a` plus Apple system libraries selected by the compiler driver.
 
-- [ ] **Step 4: Implement miniupnpc and MaxMindDB adapters.**
+- [x] **Step 4: Implement miniupnpc and MaxMindDB adapters.**
 
   Configure, build, CTest, and install with Ninja. miniupnpc’s consumer calls `miniupnpc_lib_version()` or reads the exported version symbol supported by 2.3.3 without network access. MaxMindDB’s consumer calls `MMDB_lib_version()` without requiring a GeoIP database.
 
-- [ ] **Step 5: Run GREEN and all leaf-adapter tests.**
+- [x] **Step 5: Run GREEN and all leaf-adapter tests.**
 
   ```sh
   rtk ./tests/dependency_leaf_network_adapters_test.sh
@@ -408,7 +410,7 @@
   rtk git diff --check
   ```
 
-- [ ] **Step 6: Commit checkpoint 2B.**
+- [x] **Step 6: Commit checkpoint 2B.**
 
   ```sh
   rtk git add scripts/lib/dependencies/build_openssl.sh scripts/lib/dependencies/build_miniupnpc.sh scripts/lib/dependencies/build_libmaxminddb.sh tests/dependency_leaf_network_adapters_test.sh
@@ -426,23 +428,23 @@
 - Consumes: Task 3 adapter contract; LevelDB receives exactly one dependency-prefix argv, the accepted Snappy prefix.
 - Produces: `Snappy::snappy`, `leveldb::leveldb`, static archives, and proof that LevelDB resolves and physically uses only the locked Snappy prefix.
 
-- [ ] **Step 1: Write failing chain tests.**
+- [x] **Step 1: Write failing chain tests.**
 
   Assert Snappy is invoked before LevelDB, LevelDB refuses zero or multiple prefix arguments, `CMAKE_PREFIX_PATH` contains only the supplied Snappy prefix, test/benchmark submodules remain uninitialized, and an ambient fake `libsnappy.a` in `/opt/homebrew` or `PKG_CONFIG_PATH` is not selected. Add a consumer that opens an in-memory temporary LevelDB database with `kSnappyCompression`, writes, reads, and closes one key.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk ./tests/dependency_leveldb_chain_test.sh`
 
-- [ ] **Step 3: Implement Snappy.**
+- [x] **Step 3: Implement Snappy.**
 
   Configure static-only with tests and benchmarks disabled because the pinned repository records but does not acquire its GoogleTest/benchmark gitlinks. Build/install with Ninja. Compile and run an installed-only round-trip using `snappy::Compress` and `snappy::Uncompress`; record this as the compensating test.
 
-- [ ] **Step 4: Implement LevelDB against the accepted Snappy prefix.**
+- [x] **Step 4: Implement LevelDB against the accepted Snappy prefix.**
 
   Configure with only `-DCMAKE_PREFIX_PATH=<snappy-prefix>` plus the locked flags; set `CMAKE_FIND_USE_PACKAGE_REGISTRY=OFF`, `CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF`, and `CMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON`. Inspect `CMakeCache.txt`, generated link commands, and installed config to require the accepted Snappy prefix and reject Homebrew. Run the installed LevelDB+Snappy consumer with exact static archive paths.
 
-- [ ] **Step 5: Run GREEN and orchestration regression.**
+- [x] **Step 5: Run GREEN and orchestration regression.**
 
   ```sh
   rtk ./tests/dependency_leveldb_chain_test.sh
@@ -450,7 +452,7 @@
   rtk git diff --check
   ```
 
-- [ ] **Step 6: Commit checkpoint 3.**
+- [x] **Step 6: Commit checkpoint 3.**
 
   ```sh
   rtk git add scripts/lib/dependencies/build_snappy.sh scripts/lib/dependencies/build_leveldb.sh tests/dependency_leveldb_chain_test.sh
@@ -467,23 +469,23 @@
 - Consumes: Task 3 adapter contract and Boost lock record.
 - Produces: a build-only Boost 1.90.0 prefix exporting `Boost::regex` and `Boost::thread`; it does not change the aggregate inventory.
 
-- [ ] **Step 1: Write failing Boost adapter tests.**
+- [x] **Step 1: Write failing Boost adapter tests.**
 
   Assert `bootstrap.sh` receives only `--prefix` and `--with-libraries=regex,thread`; `b2` receives the locked static ARM64/deployment flags as distinct argv entries; no shared Boost library is installed; and the external test compiles, links, and runs using `find_package(Boost 1.90.0 CONFIG REQUIRED COMPONENTS regex thread)` with registries disabled.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk ./tests/dependency_boost_adapter_test.sh`
 
-- [ ] **Step 3: Implement Boost.Build isolation and installed test.**
+- [x] **Step 3: Implement Boost.Build isolation and installed test.**
 
   Copy the immutable source into the component build root, run bootstrap and `b2 install` with the locked options, and preserve `project-config.jam`, command lines, and logs. The installed-only program must exercise `boost::regex_match` and start/join one `boost::thread`; link only archives discovered under the Boost prefix and Apple system inputs.
 
-- [ ] **Step 4: Assert build-only classification.**
+- [x] **Step 4: Assert build-only classification.**
 
   Extend the prefix report with `role=build-only` and add a test that fails if Boost appears in the Gate 5 aggregate component inventory or a future distribution input list merely because this adapter exists.
 
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 5: Run GREEN.**
 
   ```sh
   rtk ./tests/dependency_boost_adapter_test.sh
@@ -492,7 +494,7 @@
   rtk git diff --check
   ```
 
-- [ ] **Step 6: Commit checkpoint 4.**
+- [x] **Step 6: Commit checkpoint 4.**
 
   ```sh
   rtk git add scripts/lib/dependencies/build_boost.sh tests/dependency_boost_adapter_test.sh
@@ -516,23 +518,23 @@
 
 **Approved native correction:** build from a manifest-verified private tracked-file source stage under the owned reproducible output; original Source remains unchanged. `core_stage.py`, `config/core-reproducible-policy.json`, and one hash-bound patch bind exactly HashStore.cpp, CMakeLists.txt, and NetworkUtil.cpp. Reject non-24-byte Tiger-tree keys and copy into their byte array; replace only the version target COMMAND; use a constant IPv6-maximum address buffer while retaining the selected inet_ntop length. Deterministic metadata uses pinned epoch 1774518197/count zero and fixed tag/application policy. Preserve strict warnings, failed native launcher/generator/HashStore/VLA evidence, original/patched/final manifests, and staged-header provenance. The consumer validates the additive read-only staging API and both actual tag/commit identities. This supersedes direct compilation from the original checkout, without warning relaxation or source edits.
 
-- [ ] **Step 1: Write failing controlled-resolution tests.**
+- [x] **Step 1: Write failing controlled-resolution tests.**
 
   With fake component prefixes and fake CMake, assert exact prefix order, exact roots for BZip2/zlib/OpenSSL, registries disabled, empty user/system environment paths, SDK Iconv selection, and separate output path. Poison `CMAKE_PREFIX_PATH`, `CMAKE_FRAMEWORK_PATH`, `CMAKE_APPBUNDLE_PATH`, `PKG_CONFIG_PATH`, `CPATH`, `LIBRARY_PATH`, and CMake user registries with Homebrew-like paths; require the command to clear or override them. Feed a configure summary containing `/opt/homebrew`, `/usr/local/Cellar`, the user home, or an undeclared prefix and require refusal.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   Run: `rtk ./tests/reproducible_core_test.sh`
 
-- [ ] **Step 3: Replace the Homebrew-specific LevelDB assertion with a provenance-aware contract.**
+- [x] **Step 3: Replace the Homebrew-specific LevelDB assertion with a provenance-aware contract.**
 
   In `CMakeLists.txt`, keep the historical `-Werror` removal only when the imported interface actually contains the measured Homebrew pair. For the reproducible mode, require `leveldb::leveldb` to resolve under `AIRDCCORE_LEVELDB_PREFIX`, require its interface to contain exactly one Snappy reference, repair plain `snappy` to `Snappy::snappy`, and reject every imported location/include outside the allowlist. Add a cache boolean `AIRDCCORE_REPRODUCIBLE_INPUTS` default OFF so Gate 2–5 behavior remains unchanged.
 
-- [ ] **Step 4: Add recursive imported-target resolution evidence.**
+- [x] **Step 4: Add recursive imported-target resolution evidence.**
 
   Implement a CMake function that walks each required target’s `IMPORTED_LOCATION`, `INTERFACE_INCLUDE_DIRECTORIES`, `INTERFACE_LINK_LIBRARIES`, and configuration-specific variants, classifies generator expressions without evaluating unsafe content, and writes normalized `dependency-resolution.tsv`. Every non-system absolute path must be below exactly one declared component prefix; Apple SDK/Xcode paths are classified `apple-system`; plain linker names are rejected except the reviewed Threads/toolchain contract.
 
-- [ ] **Step 5: Implement `reproducible_core.sh`.**
+- [x] **Step 5: Implement `reproducible_core.sh`.**
 
   Validate all accepted prefix reports and fingerprints, validate the pinned Core checkout, resolve SDK Iconv’s real `.tbd`, and configure `Build/airdcpp-core/reproducible-release` with:
 
@@ -553,11 +555,11 @@
 
   Native implementation uses the approved private source stage and exact three-file patch described above. Bind deterministic version authority and generated outputs; validate original Source identity/bytes after success or failure. Add `rtk python3 tests/core_staging_test.py` to the final regression suite.
 
-- [ ] **Step 6: Add the build mode and scope guards.**
+- [x] **Step 6: Add the build mode and scope guards.**
 
   Extend `scripts/build` with `--build-reproducible-core`. Snapshot the whole project excluding only `Build/airdcpp-core/reproducible-release`; after success or failure require all other tracked/ignored state unchanged, including accepted dependency prefixes and historical evidence.
 
-- [ ] **Step 7: Run GREEN and earlier Core/configure regressions.**
+- [x] **Step 7: Run GREEN and earlier Core/configure regressions.**
 
   ```sh
   rtk ./tests/reproducible_core_test.sh
@@ -569,7 +571,7 @@
   rtk git diff --check
   ```
 
-- [ ] **Step 8: Commit checkpoint 5A.**
+- [x] **Step 8: Commit checkpoint 5A.**
 
   ```sh
   rtk git add scripts/build scripts/lib/reproducible_core.sh tests/reproducible_core_test.sh CMakeLists.txt cmake/modules/AirDCCorePolicy.cmake cmake/modules/AirDCCoreLinkAdapters.cmake
@@ -589,34 +591,34 @@
 - Consumes: Task 8 Core archive/evidence, all aggregate-role prefixes, existing smoke consumer, Gate 4 omission method, and ADR 0001.
 - Produces: `scripts/build --link-reproducible-consumer`, evidence at `Build/airdcpp-core/reproducible-link-interface`, and a machine-checked closure comparison.
 
-- [ ] **Step 1: Write failing link-order, runtime, and closure-drift tests.**
+- [x] **Step 1: Write failing link-order, runtime, and closure-drift tests.**
 
   Assert the full link starts with force-loaded Core and then exact static archives in this order: BZip2, zlib, OpenSSL SSL, OpenSSL Crypto, miniupnpc, LevelDB, MaxMindDB, Snappy, followed by SDK Iconv. Assert Boost is absent. Inject a Boost archive, new `.framework`, new `-l` item, reordered OpenSSL libraries, or a non-system dylib and require `link contract differs from ADR 0001`. Require the program to print one `AirDC++ Core ...` line, exit 0, and contain no prohibited path strings/load commands.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   ```sh
   rtk ./tests/reproducible_consumer_test.sh
   rtk python3 tests/link_evidence_test.py
   ```
 
-- [ ] **Step 3: Extend normalized evidence with component identity.**
+- [x] **Step 3: Extend normalized evidence with component identity.**
 
   Update the normalizer to accept `--allowed-prefix NAME=PATH` repeatedly. Emit `component:<name>` plus prefix-relative paths for locked archives, `apple-sdk` for SDK inputs, and reject unclassified absolute link inputs. Preserve the existing Gate 4 output when no allowlist is supplied.
 
-- [ ] **Step 4: Implement the separate reproducible consumer experiment.**
+- [x] **Step 4: Implement the separate reproducible consumer experiment.**
 
   Stage the reproducible Core archive and public headers in the new evidence root. Configure the existing smoke consumer with exact archive paths, registries disabled, and no Homebrew environment. Run core-only, full, omission pass 1, reduced fixed-point full, and omission pass 2 exactly as Gate 4 does. Preserve OpenSSL 3.5.8 commands/hashes/runtime separately from historical 3.6.4 evidence.
 
-- [ ] **Step 5: Enforce ADR 0001 rather than regenerating it.**
+- [x] **Step 5: Enforce ADR 0001 rather than regenerating it.**
 
   Parse the ADR’s aggregate inventory and system-link inventory. Compare normalized physical closure byte-for-byte to the expected components/system inputs. A changed closure exits nonzero and leaves evidence for review; it must not edit the ADR or report automatically.
 
-- [ ] **Step 6: Add entry point and binary checks.**
+- [x] **Step 6: Add entry point and binary checks.**
 
   Extend `scripts/build` with `--link-reproducible-consumer`. Require `file`/`lipo` exact ARM64, `otool -L` only Apple SDK/toolchain load commands, pinned Core identity at runtime, source/home/Homebrew path-leak scan, and no `Dist`/aggregate output.
 
-- [ ] **Step 7: Run GREEN and Gate 4 regression.**
+- [x] **Step 7: Run GREEN and Gate 4 regression.**
 
   ```sh
   rtk ./tests/reproducible_consumer_test.sh
@@ -628,7 +630,7 @@
   rtk git diff --check
   ```
 
-- [ ] **Step 8: Commit checkpoint 5B.**
+- [x] **Step 8: Commit checkpoint 5B.**
 
   ```sh
   rtk git add scripts/build scripts/lib/reproducible_consumer.sh scripts/lib/normalize_link_evidence.py tests/reproducible_consumer_test.sh tests/link_evidence_test.py
@@ -666,7 +668,7 @@
 
   `tests/gate6_dependency_build_test.sh` skips unless `AIRDCCORE_RUN_DEPENDENCY_TESTS=1`. It must run lock validation, accepted-source validation, `scripts/build --build-dependencies`, a second no-op build with prefix fingerprint comparison, `--build-reproducible-core`, `--link-reproducible-consumer`, all prefix validators, closure comparison, Git-boundary checks, and report validation. It must fail if network is used after acquisition or if `Dist`/an aggregate appears.
 
-  Execution decision: the complete live process tree runs under the macOS outbound-denying sandbox with localhost permitted for OpenSSL TLS tests. Deterministic socket probes fail closed. Offline `--self-test` fixtures cover descendant confinement, prefix/evidence no-op guards, report identity/ADR/twelve-criterion refusal, and generated-path boundaries. Core/consumer snapshots exclude only their own output; freeze all other project writes and keep outer logs outside the project. Native acceptance/report steps remain pending.
+  Execution decision: the complete live process tree runs under the macOS outbound-denying sandbox with localhost permitted for OpenSSL TLS tests. Deterministic socket probes fail closed. Offline `--self-test` fixtures cover descendant confinement, prefix/evidence no-op guards, report identity/ADR/twelve-criterion refusal, and generated-path boundaries. Core/consumer snapshots exclude only their own output; freeze all other project writes and keep outer logs outside the project. Fresh native checks and accepted report normal/live validation pass; the final full live-gate invocation remains pending until the coordinator runs it after all writers freeze.
 
   Review correction: matching reuse also requires a hash-bound confinement attestation for all eight dependency adapters. Missing/stale binding triggers the approved keyword-only `build_all(force_rebuild=True)` path inside the gate sandbox, preserving attempts and retaining normal drift checks. The gate observes every completed adapter before attestation, then proves two ordinary dependency-build no-ops; valid attestation is unchanged. Report checks require actual OS/SDK versions, successful required upstream commands, only approved Snappy/LevelDB GoogleTest exceptions with explicit installed-consumer compensation, and stable evidence references that exclude self-dependent scope snapshots.
 
@@ -679,7 +681,7 @@
 
   Expected: both PASS. If an unpatched upstream build fails, preserve the attempt, diagnose it, and return to the design for approval before adding a patch record; do not weaken a validator or edit source in place.
 
-- [ ] **Step 5: Write the evidence-backed Gate 6 report.**
+- [x] **Step 5: Write the evidence-backed Gate 6 report.**
 
   Copy only normalized facts from ignored evidence. Do not copy absolute worktree/home paths, raw logs, timestamps that do not describe source identity, or mutable Homebrew library paths. Mark each acceptance criterion `PASS` with its evidence-relative path and hash. Record Snappy/LevelDB’s disabled upstream GoogleTest suites and their installed-consumer compensating checks.
 
@@ -687,11 +689,11 @@
 
   Document the two update forms, three Phase 6 build modes, offline cache behavior, exact generated layout, host-tool versus library boundary, cleanup expectations, idempotent reruns, error/evidence locations, and explicit Phase 7 handoff. State clearly that Phase 6 still does not publish `Dist` or an aggregate archive.
 
-  `docs/upstream.md` was absent and is created for the acquisition contract. Acceptance is explicitly pending; documentation must only switch to accepted after native evidence and report checks pass.
+  `docs/upstream.md` was absent and is created for the acquisition contract. The report is accepted only after refreshed native evidence and normal/live report checks pass; final whole-branch report/delta review and final full-gate rerun remain explicit integration gates.
 
-- [ ] **Step 7: Run the full offline Phase 1–6 regression suite.**
+- [x] **Step 7: Run the full offline Phase 1–6 regression suite.**
 
-  Run each command and require zero exit:
+  Run each command and require zero exit. Set `HISTORICAL_CONTRACT_CHECKOUT` to a disposable current-code checkout with copied coherent historical Source/Core/link evidence, using only the exact observed historical staged version.inc bytes (hash `65c2b8b0553cdaa61b54e6ecc6e90cdba308eeeae760f24d22b2623a78a47b3c`) in its copied source. Keep the historical contracts unchanged and never restore active forensic Source or claim unavailable immediate pre-failure bytes. Set `GATE5_TRACKED_CHECKOUT` to a fresh tracked-only current-code clone with Dependencies/Build/Dist initially absent. Keep logs outside both checkouts and the active project. All other commands run in the feature worktree.
 
   ```sh
   rtk ./tests/upstream_config_test.sh
@@ -702,14 +704,13 @@
   rtk ./tests/build_configure_test.sh
   rtk ./tests/build_core_test.sh
   rtk python3 tests/archive_inspect_test.py
-  AIRDCCORE_RUN_BUILD_TESTS=1 rtk ./tests/gate3_contract_test.sh
+  AIRDCCORE_RUN_BUILD_TESTS=1 rtk "${HISTORICAL_CONTRACT_CHECKOUT:?}/tests/gate3_contract_test.sh"
   rtk ./tests/link_adapters_test.sh
   rtk ./tests/link_consumer_test.sh
   rtk ./tests/smoke_consumer_test.sh
   rtk python3 tests/link_evidence_test.py
-  AIRDCCORE_RUN_LINK_TESTS=1 rtk ./tests/gate4_contract_test.sh
-  # Run unchanged Gate 5 in a fresh tracked-only checkout (Dependencies absent).
-  rtk ./tests/gate5_distribution_shape_test.sh
+  AIRDCCORE_RUN_LINK_TESTS=1 rtk "${HISTORICAL_CONTRACT_CHECKOUT:?}/tests/gate4_contract_test.sh"
+  rtk "${GATE5_TRACKED_CHECKOUT:?}/tests/gate5_distribution_shape_test.sh"
   rtk python3 tests/dependency_lock_test.py
   rtk python3 tests/dependency_acquisition_test.py
   rtk python3 tests/dependency_build_orchestration_test.py
@@ -720,8 +721,10 @@
   rtk ./tests/reproducible_core_test.sh
   rtk python3 tests/core_staging_test.py
   rtk ./tests/reproducible_consumer_test.sh
+  rtk python3 -m unittest discover -s tests -p '*_test.py'
   rtk ./tests/gate6_contract_test.sh --self-test
   rtk ./tests/gate6_contract_test.sh
+  rtk ./tests/gate6_contract_test.sh --live
   rtk git diff --check
   rtk git status --short
   rtk git ls-files Source Dependencies Build Dist
@@ -729,7 +732,9 @@
 
   Expected: all tests PASS; `git diff --check` is silent; status lists only intended Task 10 files before commit; generated-path listing is empty.
 
-- [ ] **Step 8: Mark completed plan checkboxes and commit checkpoint 6.**
+  Final post-review run at code checkpoint `8bb5768`: complete wrapper exit 0; all ordinary component/adapter/Core/consumer tests, 189 Python tests, fourteen report/gate fixtures, normal/live accepted report guards, unchanged explicit-live historical Gate 3/4 replay and fresh tracked-only Gate 5 PASS. No production authority changed during this report/docs checkpoint. The earlier wrapper's correct historical-header refusal remains preserved separately; it is not relabeled as a successful run.
+
+- [x] **Step 8: Mark completed plan checkboxes and commit checkpoint 6.**
 
   ```sh
   rtk git add README.md docs/architecture.md docs/dependencies.md docs/upstream.md docs/build-and-release.md docs/reports/2026-09-23-gate-6-reproducible-dependencies.md docs/superpowers/plans/2026-09-23-reproducible-dependency-inputs.md tests/gate6_dependency_build_test.sh tests/gate6_contract_test.sh
@@ -737,6 +742,8 @@
   ```
 
 ### Task 11: Independent whole-branch review and GitFlow handoff
+
+**Current review status:** fresh whole-branch CODE review PASS at `8bb5768` after I1 exact option/name enforcement, I2 content/ownership/publication and fixed Git snapshot corrections, and I3 strict top-level response-file refusal. Findings were corrected by their persistent worker/reviewer pair. Final report/delta review and the final full Gate 6 result are still pending, so Task 11 completion/integration steps below remain unchecked.
 
 **Files:**
 - Review only: every change from `develop...feature/reproducible-dependencies`
