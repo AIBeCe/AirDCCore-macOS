@@ -232,12 +232,15 @@ def inspect_members(components):
                 or component.ordinal in component_ids):
             raise ValueError("invalid or duplicate component namespace")
         component_ids.add(component.ordinal)
-        count = 0
+        count, suffix_sources = 0, {}
         for ordinal, (name, payload) in enumerate(archive_members(component.archive), 1):
             count += 1
             if ordinal > 9999:
                 raise ValueError("member ordinal exceeds canonical namespace")
             suffix = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+            if suffix in suffix_sources and suffix_sources[suffix] != name:
+                raise ValueError("original member-name normalization collision")
+            suffix_sources[suffix] = name
             canonical_name = f"{component.ordinal:02d}-{component.slug}--{ordinal:04d}-{suffix}"
             if canonical_name in names:
                 raise ValueError("canonical member normalization collision")

@@ -82,6 +82,11 @@ class AggregateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate strong.*_collision"):
             self.module.classify_repetitions(members)
 
+    def test_distinct_original_names_cannot_normalize_to_same_suffix(self):
+        payload = self.object("normalized", "int normalized(void) { return 0; }")
+        with self.assertRaisesRegex(ValueError, "normalization collision"):
+            self.module.inspect_members([self.component(1, "core", [("a/b.o", payload), ("a?b.o", payload)])])
+
     def test_actual_weak_definitions_receive_member_bound_decision(self):
         payload = self.object("weak", "__attribute__((weak)) int shared(void) { return 0; }")
         members = self.module.inspect_members([self.component(1, "core", [("a.o", payload), ("b.o", payload)])])
