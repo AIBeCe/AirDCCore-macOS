@@ -235,14 +235,16 @@ class OwnedDirectory:
         clone_identity = None
         published = False
         try:
-            # Pin the clone before exposing its final name. A replacement of the
-            # private entry cannot make cleanup mistake another inode for ours.
+            # Clone-to-open is not an atomic ownership claim. Retain uncertain
+            # private attempts for forensics when initial content verification
+            # fails; the opened inode could belong to a concurrent replacement.
             clone_fd = _publish_fd(source_fd, self.fd, private)
-            clone_identity = _fd_identity(clone_fd)
+            opened_identity = _fd_identity(clone_fd)
             _check_content(clone_fd, expected_sha256)
             self.check()
-            if _identity_at(self.fd, private) != clone_identity:
+            if _identity_at(self.fd, private) != opened_identity:
                 raise AcquireError("path identity changed before publication")
+            clone_identity = opened_identity
             _rename_exclusive(self.fd, private, target)
             published = True
             if _identity_at(self.fd, target) != clone_identity:

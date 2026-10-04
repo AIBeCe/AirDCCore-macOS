@@ -421,7 +421,8 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
                 self.acquire(record)
         self.assertFalse((self.project / 'Dependencies/fixture').exists())
-        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+        self.assertTrue(any((self.project / 'Dependencies').glob('.publication-*')),
+                        'unverified private attempts must be retained conservatively')
 
     def test_cache_content_mutation_during_clone_is_not_accepted(self):
         archive, record = self.archive()
@@ -435,7 +436,8 @@ class AcquisitionTests(unittest.TestCase):
                 self.acquire(record, False)
         downloads = self.project / 'Dependencies/.downloads'
         self.assertFalse((downloads / self.a.cache_name(record)).exists())
-        self.assertFalse(any(downloads.glob('.publication-*')))
+        self.assertTrue(any(downloads.glob('.publication-*')),
+                        'unverified private attempts must be retained conservatively')
         self.assertFalse((self.project / 'Dependencies/fixture').exists())
 
     def test_content_mutation_after_clone_is_not_accepted(self):
@@ -456,7 +458,8 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
                 self.acquire(record)
         self.assertFalse((self.project / 'Dependencies/fixture').exists())
-        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+        self.assertTrue(any((self.project / 'Dependencies').glob('.publication-*')),
+                        'unverified private attempts must be retained conservatively')
 
     def test_publication_preserves_concurrent_public_winner(self):
         archive, record = self.archive()
@@ -496,6 +499,59 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual((replacement / 'winner').read_bytes(), b'keep private replacement')
         self.assertFalse((self.project / 'Dependencies/fixture').exists())
 
+    def test_clone_to_open_race_preserves_directory_winner_and_original_clone(self):
+        self.check_clone_to_open_race(directory=True)
+
+    def test_clone_to_open_race_preserves_cache_winner_and_original_clone(self):
+        self.check_clone_to_open_race(directory=False)
+
+    def check_clone_to_open_race(self, directory):
+        archive, record = self.archive()
+        if directory:
+            self.cache(archive, record)
+        parent_path = self.project / ('Dependencies' if directory else 'Dependencies/.downloads')
+        original = self.a.os.open
+        swapped = False
+        private = saved = None
+        winner_identity = None
+        def swap_before_open(name, flags, *args, **kwargs):
+            nonlocal swapped, private, saved, winner_identity
+            if not swapped and isinstance(name, str) and name.startswith('.publication-'):
+                swapped = True
+                parent = kwargs['dir_fd']
+                private = parent_path / name
+                saved = parent_path / (name + '-original')
+                os.rename(name, saved.name, src_dir_fd=parent, dst_dir_fd=parent)
+                if directory:
+                    os.mkdir(name, dir_fd=parent)
+                    winner = original(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                    try:
+                        fd = original('winner', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=winner)
+                    finally:
+                        os.close(winner)
+                else:
+                    fd = original(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=parent)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(b'keep clone-to-open winner')
+                winner_identity = private.stat().st_ino
+            return original(name, flags, *args, **kwargs)
+        with patch.object(self.a, 'open_https', return_value=io.BytesIO(archive.read_bytes())), \
+                patch.object(self.a.os, 'open', side_effect=swap_before_open):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record, directory)
+        self.assertTrue(swapped)
+        self.assertTrue(private.exists(), 'cleanup deleted an unverified concurrent winner')
+        self.assertEqual(private.stat().st_ino, winner_identity)
+        self.assertEqual((private / 'winner').read_bytes() if directory else private.read_bytes(),
+                         b'keep clone-to-open winner')
+        if directory:
+            self.assertEqual((saved / 'code.c').read_bytes(), b'source\n')
+        else:
+            self.assertEqual(saved.read_bytes(), archive.read_bytes())
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+        if not directory:
+            self.assertFalse((parent_path / self.a.cache_name(record)).exists())
+
     def test_final_publication_substitution_preserves_nonowned_replacement(self):
         archive, record = self.archive()
         self.cache(archive, record)
@@ -530,20 +586,15 @@ class AcquisitionTests(unittest.TestCase):
         self.assertFalse((self.project / 'Dependencies/fixture').exists())
         self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
 
-    def test_cleanup_failure_preserves_primary_content_error(self):
+    def test_cleanup_failure_preserves_primary_publication_error(self):
         archive, record = self.archive()
         self.cache(archive, record)
-        original = self.a._publish_fd
-        def mutate_then_clone(src, dst, name):
-            fd = os.open('code.c', os.O_WRONLY | os.O_TRUNC, dir_fd=src)
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(b'unverified mutated bytes')
-            return original(src, dst, name)
-        with patch.object(self.a, '_publish_fd', side_effect=mutate_then_clone), \
+        with patch.object(self.a, '_rename_exclusive', side_effect=OSError(errno.EIO, 'rename failed')), \
                 patch.object(self.a, '_remove_at', side_effect=OSError('cleanup failed')):
-            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed') as failure:
+            with self.assertRaisesRegex(self.a.AcquireError, 'path identity changed') as failure:
                 self.acquire(record)
-        self.assertTrue(any('cleanup failed' in note for note in failure.exception.__notes__))
+        self.assertEqual(failure.exception.__cause__.errno, errno.EIO)
+        self.assertTrue(any('cleanup failed' in note for note in failure.exception.__cause__.__notes__))
         self.assertFalse((self.project / 'Dependencies/fixture').exists())
 
     def test_content_mutation_during_fsync_refuses_acceptance(self):
@@ -716,7 +767,8 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
                 self.acquire(record, False)
         self.assertFalse((self.project / 'Dependencies/snappy').exists())
-        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+        self.assertTrue(any((self.project / 'Dependencies').glob('.publication-*')),
+                        'unverified private attempts must be retained conservatively')
 
     def test_git_metadata_mutation_during_clone_is_not_accepted(self):
         record, fetch = self.git_record()
