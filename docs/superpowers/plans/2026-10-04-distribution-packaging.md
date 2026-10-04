@@ -86,4 +86,14 @@ evidence lives under Build or private temporary directories, not Dist metadata.
 
 - Phase 6 baseline: `ae44251656fb07cfe1f77a6a577e588df1f42e1c`.
 - Approved phase scope and continuous execution: 2026-10-04.
-- Tasks 1–3: pending.
+- Task 1: complete; validated ingredients, Mach-O member/symbol policy, two
+  byte-identical aggregate constructions; independent spec/quality PASS.
+  Commits `87108e0`, `5b60a01`.
+- Task 2: complete; byte-bound headers/notices/provenance, verification-only
+  contract and atomic publication/rollback; I1/I2 and independent spec/quality
+  PASS. Commits `2fe8507`, `f6bfea6`.
+- Task 3: implementation and native Gate 7 PASS; 229 Python regressions PASS.
+  Public proof binds archive/header/probe inputs without checksum recursion;
+  fresh verification compiles/links/runs from relocated Dist only. Both
+  contextual header fragments retain original bytes and documented context.
+  Independent review and local integration remain pending; no Phase 8 start.

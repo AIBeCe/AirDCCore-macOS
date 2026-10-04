@@ -21,13 +21,15 @@ from dependency_prefix import tree_digest
 from distribution_aggregate import (ORDER, Member, canonical, classify_repetitions,
     construct_aggregates, document, macho, regular, sha, verify_aggregate)
 from inspect_core_archive import archive_members
+from distribution_consumer import prove_consumer, validate_consumer_proof
 
 PLATFORM = dict(architecture="arm64", deployment_target="14.0", build_type="Release",
     cxx_standard=20, cxx_runtime="libc++", linkage="static", enable_natpmp=False, enable_tbb=False)
 LINK_INTERFACE = dict(schema_version=1, archive="lib/libairdcpp.a", include_directory="include",
     cxx_standard=20, explicit_system_libraries=["Iconv"],
     implicit_system_libraries=["libc++", "libSystem"], frameworks=[],
-    consumer_verification="pending Gate 7 relocated consumer")
+    consumer_verification="PASS: relocated force-loaded consumer",
+    consumer_proof="metadata/consumer-proof.json")
 HEADER_POLICY = dict(core="enabled macOS airdcpp_hdrs plus generated version.inc",
     excluded=["airdcpp/modules/**", "airdcpp/core/io/compress/ZipFile.h"],
     reason="pinned upstream CMakeLists.txt excludes modules and ZipFile on non-Windows",
@@ -39,6 +41,7 @@ METADATA_PATHS = {
     "metadata/aggregate-provenance.json", "metadata/member-map.json", "metadata/coalescing-decisions.json",
     "metadata/core-source-manifest.json", "metadata/prefix-manifests.json",
     "metadata/maxminddb-source-manifest.json",
+    "metadata/consumer-proof.json",
 }
 AGGREGATE_ALGORITHM = "ADR-0001 canonical members; LC_ALL=C; Apple libtool -static -D -filelist"
 PROVENANCE_FIELDS = {"schema", "algorithm", "components", "container", "independent_containers", "tool"}
@@ -275,6 +278,9 @@ def stage_candidate(project, candidate, result):
         put(candidate, notice_row["path"], notices)
         archive_bytes = regular(result["archive"])
         put(candidate, "lib/libairdcpp.a", archive_bytes)
+        consumer_identity = dict(commit=core["upstream_commit"], tag=policy["version"]["tag"])
+        consumer_proof = prove_consumer(candidate, headers, consumer_identity,
+            forbidden_roots=[project / name for name in ("Source", "Dependencies", "Build")])
         provenance = json.loads(canonical(result["provenance"]))
         provenance["components"][0]["source"] = core_source
         provenance["components"][0]["build_policy"] = build_policy
@@ -288,6 +294,7 @@ def stage_candidate(project, candidate, result):
             "metadata/core-source-manifest.json": core_rows,
             "metadata/prefix-manifests.json": prefix_rows,
             "metadata/maxminddb-source-manifest.json": maxmind_rows,
+            "metadata/consumer-proof.json": consumer_proof,
         }
         for path, value in metadata.items():
             put(candidate, path, canonical(value))
@@ -345,7 +352,7 @@ def _package_members(archive, mapping):
     return members
 
 
-def verify_package(package, authority_project):
+def verify_package(package, authority_project, *, fresh_consumer=False, consumer_evidence=None):
     """Read existing Dist; authority reads are limited to tracked config/licenses.
 
     Checksums are integrity checks, not a signature or a substitute for pin,
@@ -464,6 +471,16 @@ def verify_package(package, authority_project):
                 raise ValueError("aggregate dependency pin/install identity differs")
     if metadata["metadata/coalescing-decisions.json"] != classify_repetitions(members):
         raise ValueError("aggregate symbol coalescing decisions differ")
+    consumer_identity = dict(commit=policy["upstream_commit"], tag=policy["version"]["tag"])
+    consumer = metadata["metadata/consumer-proof.json"]
+    validate_consumer_proof(package, headers, consumer_identity, consumer)
+    if consumer["compiler"] != build_policy["compiler"] or consumer["sdk_version"] != build_policy["sdk_version"]:
+        raise ValueError("consumer proof accepted tool policy differs")
+    if fresh_consumer:
+        measured = prove_consumer(package, headers, consumer_identity, evidence=consumer_evidence,
+            forbidden_roots=[authority / name for name in ("Source", "Dependencies", "Build")])
+        if measured != consumer:
+            raise ValueError("fresh relocated consumer differs from public proof")
     return dict(member_count=len(members), file_count=len(files), archive_sha256=proof["archive_sha256"],
                 consumer_verification=LINK_INTERFACE["consumer_verification"])
 
@@ -512,7 +529,7 @@ def main(project, argv=None):
     parser.add_argument("--verify", metavar="DIST", help="read-only verification; reads tracked config/license policy only")
     args = parser.parse_args(argv)
     try:
-        report = verify_package(Path(args.verify).absolute(), project) if args.verify else package(project)
+        report = verify_package(Path(args.verify).absolute(), project, fresh_consumer=True) if args.verify else package(project)
         print("package: PASS " + json.dumps(report, sort_keys=True))
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:

@@ -82,6 +82,17 @@ use implicit libc++/libSystem. Verify pinned Core identity at runtime and
 inspect actual load commands. Verify public header closure without reaching
 back to Source, Dependencies, Build, or Homebrew.
 
+Every published candidate carries `metadata/consumer-proof.json`. Bind its
+normalized evidence to the archive checksum, complete header inventory digest,
+and probe source digest, not the manifest/checksum files that contain the proof
+itself. Record compiler/SDK identity, supported macOS header closure, force-load
+member count, runtime Core identity, load commands, and final system imports.
+Exclude volatile relocation paths, times, and executable UUIDs. Link metadata
+references the completed proof rather than a pending milestone. The public
+verification-only operation recomputes the relocated proof and compares its
+normalized evidence; internal structural candidate checks need not repeatedly
+compile the same candidate. Real compiler fixtures exercise this boundary.
+
 Build a candidate privately and validate before replacing `Dist`. Refuse
 unsafe output targets; failures preserve an existing accepted distribution.
 Reruns must have identical published file inventory and content hashes.

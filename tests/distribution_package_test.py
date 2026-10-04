@@ -44,7 +44,8 @@ class PackageTests(unittest.TestCase):
         stage = core / "source"
         policy = json.loads((self.project / "config/core-reproducible-policy.json").read_text())
         core_files = {
-            "airdcpp/core/Version.h": b"/* Copyright fixture. GNU General Public License version 3 or later. */\n#pragma once\n",
+            "airdcpp/core/Version.h": b"/* Copyright fixture. GNU General Public License version 3 or later. */\n#pragma once\n#include <string>\nnamespace dcpp { std::string getVersionTag(); std::string getGitCommit(); }\n",
+            "airdcpp/stdinc.h": b"/* GNU General Public License version 3 or later. */\n#pragma once\n#include <string>\n",
             "airdcpp/core/version.inc": version_bytes(policy),
             "airdcpp/modules/private.h": b"#include <unavailable-module.h>\n",
             "airdcpp/core/io/compress/ZipFile.h": b"#include <minizip.h>\n",
@@ -78,7 +79,14 @@ class PackageTests(unittest.TestCase):
         for ordinal, (slug, owner, relative) in enumerate(aggregate.ORDER, 1):
             cfile, obj, archive = ingredients / (slug + ".c"), ingredients / (slug + ".o"), ingredients / (slug + ".a")
             cfile.write_text("int component_" + str(ordinal) + "(void) { return " + str(ordinal) + "; }\n")
-            subprocess.run(["/usr/bin/clang", "-arch", "arm64", "-mmacosx-version-min=14.0",
+            compiler = "/usr/bin/clang"
+            if owner is None:
+                cfile = cfile.with_suffix(".cpp")
+                cfile.write_text('#include <string>\nnamespace dcpp { std::string getVersionTag() { return "'
+                    + policy["version"]["tag"] + '"; } std::string getGitCommit() { return "'
+                    + policy["upstream_commit"] + '"; } }\n')
+                compiler = "/usr/bin/clang++"
+            subprocess.run([compiler, "-arch", "arm64", "-mmacosx-version-min=14.0",
                             "-c", str(cfile), "-o", str(obj)], check=True, capture_output=True)
             subprocess.run(["/usr/bin/libtool", "-static", "-D", "-o", str(archive), str(obj)],
                            check=True, capture_output=True)
@@ -119,14 +127,18 @@ class PackageTests(unittest.TestCase):
                 container=proof, independent_containers=2,
                 tool=dict(name="Apple libtool", sha256="b" * 64, version="Apple Inc. version fixture-1")))
         from dependency_build import ToolInventory
-        tools = ToolInventory(str(self.work / "SDK"), "26.5", {}, {},
-            {"apple.cxx": dict(sha256="c" * 64, version="Apple clang version fixture-1")})
+        sdk = subprocess.check_output(["/usr/bin/xcrun", "--show-sdk-path"], text=True).strip()
+        cxx = subprocess.check_output(["/usr/bin/xcrun", "--find", "clang++"], text=True).strip()
+        cxx_identity = dict(sha256=aggregate.sha(Path(cxx).resolve().read_bytes()),
+            version=subprocess.check_output([cxx, "--version"], text=True).splitlines()[0])
+        tools = ToolInventory(sdk, subprocess.check_output(["/usr/bin/xcrun", "--show-sdk-version"], text=True).strip(),
+            {}, {}, {"apple.cxx": cxx_identity})
         self.result["tools"] = tools
         flags = "-O3 -DNDEBUG -std=c++20 -arch arm64 -isysroot $SDK -mmacosx-version-min=14.0"
         build_policy = dict(schema_version=1, upstream_commit=policy["upstream_commit"],
             archive_sha256=components[0].provenance["archive_sha256"], core_input_fingerprint="a" * 64,
-            compiler=dict(name="Apple Clang C++", sha256="c" * 64, version="Apple clang version fixture-1"),
-            aggregate_tool=self.result["provenance"]["tool"], sdk_version="26.5", compile_flags=flags,
+            compiler=dict(name="Apple Clang C++", **cxx_identity),
+            aggregate_tool=self.result["provenance"]["tool"], sdk_version=tools.sdk_version, compile_flags=flags,
             include_flags="-I$CORE_SOURCE", common_definitions="-DNO_CLIENT_UPDATER", definition_overrides=[],
             rationale="fixture accepted compile policy")
         (self.project / "config/packaging-core-policy.json").write_bytes(aggregate.canonical(build_policy))
@@ -150,6 +162,8 @@ class PackageTests(unittest.TestCase):
 
     def test_complete_candidate_is_relocatable_and_preserves_enabled_headers(self):
         self.stage()
+        self.assertTrue((self.candidate / "metadata/consumer-proof.json").is_file(),
+                        "public package lacks measured relocated consumer proof")
         self.assertTrue((self.candidate / "include/airdcpp/core/Version.h").is_file())
         self.assertTrue((self.candidate / "include/airdcpp/core/version.inc").is_file())
         self.assertTrue((self.candidate / "include/boost/nested.hpp").is_file())
@@ -387,6 +401,24 @@ class PackageTests(unittest.TestCase):
         self.resign(self.candidate)
         with self.assertRaisesRegex(ValueError, "Core.*policy"):
             self.package.verify_package(self.candidate, self.project)
+
+    def test_public_consumer_binding_and_fresh_measurement_reject_rehashed_drift(self):
+        self.stage()
+        proof_path = self.candidate / "metadata/consumer-proof.json"
+        saved = proof_path.read_bytes()
+        for field, value in (("result", "pending"), ("force_loaded_members", 0)):
+            proof = json.loads(saved)
+            proof[field] = value
+            proof_path.write_bytes(self.aggregate.canonical(proof))
+            self.resign(self.candidate)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "consumer"):
+                self.package.verify_package(self.candidate, self.project)
+        proof = json.loads(saved)
+        proof["final_system_imports"] = ["_invented_system_import"]
+        proof_path.write_bytes(self.aggregate.canonical(proof))
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "fresh.*consumer"):
+            self.package.verify_package(self.candidate, self.project, fresh_consumer=True)
 
     def test_observed_ninja_compile_flags_must_match_bound_policy(self):
         ninja = self.project / "Build/airdcpp-core/reproducible-release/build.ninja"

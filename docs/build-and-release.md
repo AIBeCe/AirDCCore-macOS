@@ -2,7 +2,7 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-Acquisition, native configure discovery, Core and consumer builds, the aggregate distribution decision, and the accepted Phase 6 inputs are implemented. Phase 7 provides validated deterministic packaging; the relocated consumer and Gate 7 acceptance are still pending. Phase 8 release verification remains deferred.
+Acquisition, native configure discovery, Core and consumer builds, the aggregate distribution decision, and the accepted Phase 6 inputs are implemented. Phase 7 provides validated deterministic packaging and a measured relocated consumer; native Gate 7 passes, with independent review required before integration. Phase 8 release verification remains deferred.
 
 ## Required sequence
 
@@ -106,6 +106,7 @@ After the accepted Phase 6 dependency and reproducible Core outputs exist, run:
 ```sh
 ./scripts/package
 ./scripts/package --verify /absolute/path/to/relocated/Dist
+AIRDCCORE_RUN_DISTRIBUTION_TESTS=1 ./tests/gate7_distribution_test.sh
 ```
 
 The default command validates the accepted inputs without rebuilding or
@@ -140,11 +141,32 @@ read `Source`, `Dependencies`, or `Build`. Checksums establish integrity, not
 an artifact signature. Recorded per-member undefined references include symbols
 resolved by other members; they are not the remaining system link boundary.
 
+Every candidate is copied to a private relocated directory and measured before
+publication. The compiler parses all supported macOS Core public headers using
+the locked feature guards. `StringDefs.h` is parsed inside `ResourceManager`,
+and `pubkey.h` follows `UpdateManager.h`; these contextual fragments remain
+staged unchanged. This syntax-only probe is separate from the linked identity
+consumer, which force-loads every aggregate member. Compiler processes deny
+private project and Homebrew inputs, and measured header dependencies are
+restricted to Dist plus the Apple SDK/toolchain.
+
+`metadata/consumer-proof.json` binds the aggregate, complete header inventory
+and both probe sources, not metadata containing the proof itself. It records
+normalized compiler/SDK identity, public closure, actual link-map member
+coverage, runtime Core identity, load commands, resolved source external
+definitions (including linker-localized weak definitions), and final system
+imports. Private commands/logs/maps/executables are not published. `--verify`
+recomputes this real relocated proof; missing/pending/unbound proof cannot pass.
+
 The public link contract remains explicit SDK Iconv with implicit libc++ and
-libSystem, and no Apple frameworks. Packaging metadata marks consumer
-verification pending until Task 3 measures a relocated force-loaded consumer.
-Successful package validation alone is not Gate 7 acceptance or Phase 8
-minimum-OS/full-clean-build release proof.
+libSystem, and no Apple frameworks. The live gate packages twice, compares
+complete published inventory/content, repeats relocated verification, rejects
+rehashed tampering, and retains private evidence under `/private/tmp/airdc-gate7-*`.
+Without its opt-in variable it skips. `--verify DIST` performs the relocated
+verification/negative subset without reconstructing private inputs or claiming
+a new two-package comparison. See the [Gate 7 report](reports/2026-10-04-gate-7-distribution-packaging.md).
+No Gate 7 result proves Phase 8 minimum-OS runtime or full-clean-build release
+reproducibility.
 
 Freeze every other project writer during real Core/consumer modes: their snapshots exclude only their own output. Changing documentation, Git state, sources, another output, or project-local logs violates scope. Save outer stdout/stderr outside the project in a private temporary path; copy durable evidence to ignored `Build/gate6` only between subprocesses or after execution. First capture without a tracked report refuses acceptance after preserving native evidence. Normalize facts, track the report, and rerun; fixtures and incomplete captures cannot establish PASS.
 
