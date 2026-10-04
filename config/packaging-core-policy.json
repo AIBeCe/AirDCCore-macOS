@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "upstream_commit": "55d51ceb817ec006d4ec844d9e3788e1b0ccc352",
+  "archive_sha256": "085b179a33c9298c07554f5eac2159d531cc0208af718d2d4958f86507bfec93",
+  "core_input_fingerprint": "d306a8804b78b4acd98cab66b8b9e0e2b9c680c40b2e748a019ad55b403118c6",
+  "compiler": {
+    "name": "Apple Clang C++",
+    "sha256": "7def90dd8829726686213a747fc5bff1583df933dae5edc55d755479e0bfe00a",
+    "version": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
+  },
+  "aggregate_tool": {
+    "name": "Apple libtool",
+    "sha256": "179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818",
+    "version": "Apple Inc. version cctools_ld-1267"
+  },
+  "sdk_version": "26.5",
+  "compile_flags": "-O3 -DNDEBUG -std=c++20 -arch arm64 -isysroot $SDK -mmacosx-version-min=14.0 -ffile-prefix-map=$CORE_SOURCE=airdcpp-core -Werror -Wthread-safety -Winvalid-pch -Xclang -include-pch -Xclang $CORE_BUILD/upstream/CMakeFiles/airdcpp.dir/cmake_pch.hxx.pch -Xclang -include -Xclang $CORE_BUILD/upstream/CMakeFiles/airdcpp.dir/cmake_pch.hxx",
+  "include_flags": "-I$CORE_SOURCE/airdcpp -I$CORE_SOURCE -isystem $PREFIX/bzip2/include -isystem $PREFIX/zlib/include -isystem $PREFIX/openssl/include -isystem $PREFIX/miniupnpc/include -isystem $PREFIX/leveldb/include -isystem $PREFIX/snappy/include -isystem $PREFIX/libmaxminddb/include -isystem $PREFIX/boost/include",
+  "common_definitions": "-DBOOST_ATOMIC_NO_LIB -DBOOST_CHRONO_NO_LIB -DBOOST_CONTAINER_NO_LIB -DBOOST_DATE_TIME_NO_LIB -DBOOST_REGEX_NO_LIB -DBOOST_THREAD_NO_LIB -DNO_CLIENT_UPDATER",
+  "definition_overrides": [
+    {
+      "member": "AppUtil.cpp.o",
+      "definitions": "-DBOOST_ATOMIC_NO_LIB -DBOOST_CHRONO_NO_LIB -DBOOST_CONTAINER_NO_LIB -DBOOST_DATE_TIME_NO_LIB -DBOOST_REGEX_NO_LIB -DBOOST_THREAD_NO_LIB -DNO_CLIENT_UPDATER -DGLOBAL_CONFIG_DIRECTORY=\"\\\"Library/Application Support/AirDC++\\\"\" -DRESOURCE_DIRECTORY=\\\"share/airdcpp\\\""
+    },
+    {
+      "member": "NetworkUtil.cpp.o",
+      "definitions": "-DBOOST_ATOMIC_NO_LIB -DBOOST_CHRONO_NO_LIB -DBOOST_CONTAINER_NO_LIB -DBOOST_DATE_TIME_NO_LIB -DBOOST_REGEX_NO_LIB -DBOOST_THREAD_NO_LIB -DNO_CLIENT_UPDATER -DHAVE_IFADDRS_H"
+    }
+  ],
+  "rationale": "Packaging-only capture of the accepted Core's common Ninja object flags and two material definition overrides, bound to its archive, source/input fingerprint and compiler/construction tools. Architecture, deployment, C++20, Release optimization and source mapping agree with accepted CMake cache/summary and tracked target policy. The successful build log is not verbose, so Ninja is observed metadata rather than independent immutable compile-command authority. SDK/source/build/prefix paths are normalized to stable tokens; no Phase 6 input is changed."
+}

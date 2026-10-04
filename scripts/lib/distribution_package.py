@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict
 import json
 import os
@@ -39,6 +40,89 @@ METADATA_PATHS = {
     "metadata/core-source-manifest.json", "metadata/prefix-manifests.json",
     "metadata/maxminddb-source-manifest.json",
 }
+AGGREGATE_ALGORITHM = "ADR-0001 canonical members; LC_ALL=C; Apple libtool -static -D -filelist"
+PROVENANCE_FIELDS = {"schema", "algorithm", "components", "container", "independent_containers", "tool"}
+
+
+def _digest_field(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _upstream_source(authority):
+    values = {}
+    for line in regular(authority / "config/upstream.env").decode().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key not in ("AIRDCPP_CORE_URL", "AIRDCPP_CORE_COMMIT") or key in values:
+            raise ValueError("Core source authority differs")
+        values[key] = value
+    if set(values) != {"AIRDCPP_CORE_URL", "AIRDCPP_CORE_COMMIT"}:
+        raise ValueError("Core source authority incomplete")
+    return dict(url=values["AIRDCPP_CORE_URL"], commit=values["AIRDCPP_CORE_COMMIT"])
+
+
+def _observed_core_flags(project, result):
+    """Compact observed object flags; the tracked policy supplies authority.
+
+    The accepted successful log is not verbose. Ninja is therefore checked
+    metadata, bound to archive/input/compiler identities, not an independent
+    immutable transcript of every compiler invocation.
+    """
+    core = Path(result["core"]["staged_root"]).parent
+    tools = result["tools"]
+    rows = re.findall(r"^build (upstream/[^\n:]+\.o): CXX_COMPILER[^\n]*\n(.*?)(?=\n\n)",
+                      regular(core / "build.ninja").decode(), re.MULTILINE | re.DOTALL)
+    def normalized(text):
+        for sysroot in re.findall(r"-isysroot\s+(\S+)", text):
+            if Path(sysroot).resolve() != Path(tools.sdkroot).resolve():
+                raise ValueError("Core compile policy SDK differs")
+            text = text.replace(sysroot, "$SDK")
+        text = text.replace(str(core / "source"), "$CORE_SOURCE").replace(str(core), "$CORE_BUILD")
+        for name in result["reports"]:
+            text = text.replace(str(project / "Build/prefix" / name), "$PREFIX/" + name)
+        return text
+    objects, flags, includes, definitions = [], set(), set(), []
+    for path, body in rows:
+        fields = {}
+        for name in ("FLAGS", "INCLUDES", "DEFINES"):
+            match = re.search(r"^  " + name + r" = (.*)$", body, re.MULTILINE)
+            if match is None:
+                raise ValueError("Core compile policy evidence incomplete")
+            fields[name] = normalized(match.group(1))
+        member = PurePosixPath(path).name
+        objects.append(member)
+        flags.add(fields["FLAGS"])
+        includes.add(fields["INCLUDES"])
+        definitions.append((member, fields["DEFINES"]))
+    expected = [member.original_name for member in result["members"] if member.component == "core"]
+    if sorted(objects) != sorted(expected) or len(flags) != 1 or len(includes) != 1:
+        raise ValueError("Core compile policy object/flag inventory differs")
+    common = Counter(value for name, value in definitions).most_common(1)[0][0]
+    return dict(compile_flags=next(iter(flags)), include_flags=next(iter(includes)), common_definitions=common,
+        definition_overrides=[dict(member=name, definitions=value) for name, value in sorted(definitions) if value != common])
+
+
+def _core_build_policy(project, result=None):
+    policy = document(project / "config/packaging-core-policy.json")
+    if (policy.get("schema_version") != 1 or not _digest_field(policy.get("archive_sha256"))
+            or not _digest_field(policy.get("core_input_fingerprint"))):
+        raise ValueError("Core build policy identity differs")
+    if result is not None:
+        core_component = result["provenance"]["components"][0]
+        tools = result["tools"]
+        compiler = tools.identities["apple.cxx"]
+        identity = dict(name="Apple Clang C++", sha256=compiler["sha256"], version=compiler["version"].splitlines()[0])
+        if (policy["archive_sha256"] != core_component["archive_sha256"]
+                or policy["core_input_fingerprint"] != core_component["core_input_fingerprint"]
+                or policy["upstream_commit"] != result["core"]["upstream_commit"]
+                or policy["compiler"] != identity or policy["sdk_version"] != tools.sdk_version
+                or policy["aggregate_tool"] != result["provenance"]["tool"]):
+            raise ValueError("Core build policy accepted identity differs")
+        observed = _observed_core_flags(project, result)
+        if any(policy[name] != value for name, value in observed.items()):
+            raise ValueError("Core observed compile flags/definitions differ from bound policy")
+    return policy
 
 
 def relative(value):
@@ -154,6 +238,10 @@ def stage_candidate(project, candidate, result):
             raise ValueError("package candidate must be empty")
         lock = load_lock(project / "config/dependencies.lock")
         policy = document(project / "config/core-reproducible-policy.json")
+        core_source = _upstream_source(project)
+        build_policy = _core_build_policy(project, result)
+        if core_source["commit"] != policy["upstream_commit"]:
+            raise ValueError("Core source pin policy differs")
         core = result["core"]
         core_rows = document(Path(core["staged_root"]).parent / "staged-source-manifest.json")
         if sha(canonical(core_rows)) != core["staged_manifest_sha256"]:
@@ -188,6 +276,8 @@ def stage_candidate(project, candidate, result):
         archive_bytes = regular(result["archive"])
         put(candidate, "lib/libairdcpp.a", archive_bytes)
         provenance = json.loads(canonical(result["provenance"]))
+        provenance["components"][0]["source"] = core_source
+        provenance["components"][0]["build_policy"] = build_policy
         # This is member-reference inventory, not a solved aggregate boundary.
         provenance["container"]["member_undefined_references"] = provenance["container"].pop("undefined_symbols")
         metadata = {
@@ -205,6 +295,7 @@ def stage_candidate(project, candidate, result):
             lock_sha256=sha(canonical_bytes(lock)), dependencies=[asdict(r) for r in lock.dependencies],
             prefix_manifest_sha256={name: report.manifest_sha256 for name, report in sorted(result["reports"].items())},
             core=dict(upstream_commit=core["upstream_commit"], source_manifest_sha256=core["staged_manifest_sha256"],
+                      source_url=core_source["url"], build_policy=build_policy,
                       version=policy["version"], source_date_epoch=policy["source_date_epoch"], patch=policy["patch"]),
             components=provenance["components"], aggregate_sha256=sha(archive_bytes),
             header_policy=HEADER_POLICY, headers=headers, licenses=licenses,
@@ -283,12 +374,13 @@ def verify_package(package, authority_project):
         raise ValueError("package platform/header policy differs")
     lock = load_lock(authority / "config/dependencies.lock")
     policy = document(authority / "config/core-reproducible-policy.json")
+    source, build_policy = _upstream_source(authority), _core_build_policy(authority)
     if manifest["lock_sha256"] != sha(canonical_bytes(lock)) or canonical(manifest["dependencies"]) != canonical([asdict(r) for r in lock.dependencies]):
         raise ValueError("package immutable lock pins differ")
-    expected_core = dict(upstream_commit=policy["upstream_commit"],
+    expected_core = dict(upstream_commit=policy["upstream_commit"], source_url=source["url"], build_policy=build_policy,
         source_manifest_sha256=manifest["core"]["source_manifest_sha256"], version=policy["version"],
         source_date_epoch=policy["source_date_epoch"], patch=policy["patch"])
-    if manifest["core"] != expected_core:
+    if manifest["core"] != expected_core or source["commit"] != policy["upstream_commit"] or build_policy["upstream_commit"] != policy["upstream_commit"]:
         raise ValueError("package Core pin/version/patch policy differs")
     if metadata["metadata/link-interface.json"] != LINK_INTERFACE:
         raise ValueError("package system link boundary differs")
@@ -335,6 +427,15 @@ def verify_package(package, authority_project):
     proof = verify_aggregate(archive, members)
     proof["member_undefined_references"] = proof.pop("undefined_symbols")
     provenance = metadata["metadata/aggregate-provenance.json"]
+    if (set(provenance) != PROVENANCE_FIELDS or provenance["schema"] != 1
+            or provenance["algorithm"] != AGGREGATE_ALGORITHM):
+        raise ValueError("aggregate provenance schema/algorithm differs")
+    tool = provenance["tool"]
+    if (not isinstance(tool, dict) or set(tool) != {"name", "sha256", "version"}
+            or tool["name"] != "Apple libtool" or not _digest_field(tool["sha256"])
+            or not isinstance(tool["version"], str)
+            or not re.fullmatch(r"Apple Inc\. version [A-Za-z0-9_.-]+", tool["version"])):
+        raise ValueError("aggregate provenance tool identity differs")
     if provenance["container"] != proof or manifest["aggregate_sha256"] != proof["archive_sha256"]:
         raise ValueError("aggregate physical verification differs from provenance")
     if provenance["independent_containers"] != 2 or manifest["components"] != provenance["components"]:
@@ -342,13 +443,22 @@ def verify_package(package, authority_project):
     records = {r.name: r for r in lock.dependencies}
     if len(manifest["components"]) != len(ORDER):
         raise ValueError("aggregate component count differs")
-    for ordinal, ((slug, owner, unused), component) in enumerate(zip(ORDER, manifest["components"]), 1):
+    for ordinal, ((slug, owner, ingredient), component) in enumerate(zip(ORDER, manifest["components"]), 1):
         if component["ordinal"] != ordinal or component["component"] != slug:
             raise ValueError("aggregate component order differs")
         if owner is None:
-            if component["source"] != {"commit": policy["upstream_commit"]} or component["source_manifest_sha256"] != manifest["core"]["source_manifest_sha256"]:
+            if not _digest_field(component.get("archive_sha256")) or not _digest_field(component.get("core_input_fingerprint")):
+                raise ValueError("aggregate Core provenance digest/fingerprint differs")
+            if (component["source"] != source or component["source_manifest_sha256"] != manifest["core"]["source_manifest_sha256"]
+                    or component.get("build_policy") != build_policy or component["archive_sha256"] != build_policy["archive_sha256"]
+                    or component["core_input_fingerprint"] != build_policy["core_input_fingerprint"]
+                    or provenance["tool"] != build_policy["aggregate_tool"]):
                 raise ValueError("aggregate Core source identity differs")
         else:
+            archive_row = next((row for row in prefix_rows[owner]
+                                if row["path"] == "$PREFIX/" + ingredient and row["type"] == "file"), None)
+            if archive_row is None or not _digest_field(component.get("archive_sha256")) or component["archive_sha256"] != archive_row["sha256"]:
+                raise ValueError("aggregate ingredient archive digest differs")
             raw_prefix = b"".join(canonical(row) for row in prefix_rows[owner])
             if canonical(component["record"]) != canonical(asdict(records[owner])) or component["install_manifest_sha256"] != sha(raw_prefix):
                 raise ValueError("aggregate dependency pin/install identity differs")

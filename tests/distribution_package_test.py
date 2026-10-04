@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Complete package validation and preservation using real Darwin objects."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import shutil
@@ -90,6 +90,22 @@ class PackageTests(unittest.TestCase):
                               "install_manifest_sha256": reports[owner].manifest_sha256})
             components.append(aggregate.Component(ordinal, slug, archive,
                               dict(provenance, archive_sha256=aggregate.sha(archive.read_bytes()))))
+        # Match real accepted prefixes: archive digests are part of their install manifests.
+        for component, (slug, owner, relative) in zip(components, aggregate.ORDER):
+            if owner is not None:
+                destination = self.project / "Build/prefix" / owner / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(component.archive, destination)
+        for record in self.lock.dependencies:
+            prefix = self.project / "Build/prefix" / record.name
+            manifest = "".join(aggregate.canonical(dict(json.loads(line),
+                path="$PREFIX/" + json.loads(line)["path"])).decode()
+                for line in _entry_manifest(prefix).decode().splitlines())
+            reports[record.name] = PrefixReport(record.name, record.role, manifest,
+                                               aggregate.sha(manifest.encode()), ())
+        components = [replace(component, provenance=dict(component.provenance,
+            install_manifest_sha256=reports[owner].manifest_sha256)) if owner is not None else component
+            for component, (slug, owner, relative) in zip(components, aggregate.ORDER)]
         members = aggregate.inspect_members(components)
         archive = self.work / "aggregate.a"
         aggregate.build_aggregate(members, archive)
@@ -98,9 +114,25 @@ class PackageTests(unittest.TestCase):
             core=dict(staged_root=str(stage), staged_manifest_sha256=aggregate.sha(aggregate.canonical(core_rows)),
                       upstream_commit=policy["upstream_commit"]),
             decisions=aggregate.classify_repetitions(members),
-            provenance=dict(schema=1, components=[dict(ordinal=c.ordinal, component=c.slug, **c.provenance) for c in components],
+            provenance=dict(schema=1, algorithm="ADR-0001 canonical members; LC_ALL=C; Apple libtool -static -D -filelist",
+                components=[dict(ordinal=c.ordinal, component=c.slug, **c.provenance) for c in components],
                 container=proof, independent_containers=2,
-                tool=dict(name="Apple libtool", sha256="b" * 64, version="fixture Apple libtool")))
+                tool=dict(name="Apple libtool", sha256="b" * 64, version="Apple Inc. version fixture-1")))
+        from dependency_build import ToolInventory
+        tools = ToolInventory(str(self.work / "SDK"), "26.5", {}, {},
+            {"apple.cxx": dict(sha256="c" * 64, version="Apple clang version fixture-1")})
+        self.result["tools"] = tools
+        flags = "-O3 -DNDEBUG -std=c++20 -arch arm64 -isysroot $SDK -mmacosx-version-min=14.0"
+        build_policy = dict(schema_version=1, upstream_commit=policy["upstream_commit"],
+            archive_sha256=components[0].provenance["archive_sha256"], core_input_fingerprint="a" * 64,
+            compiler=dict(name="Apple Clang C++", sha256="c" * 64, version="Apple clang version fixture-1"),
+            aggregate_tool=self.result["provenance"]["tool"], sdk_version="26.5", compile_flags=flags,
+            include_flags="-I$CORE_SOURCE", common_definitions="-DNO_CLIENT_UPDATER", definition_overrides=[],
+            rationale="fixture accepted compile policy")
+        (self.project / "config/packaging-core-policy.json").write_bytes(aggregate.canonical(build_policy))
+        (core / "build.ninja").write_text("build upstream/core.o: CXX_COMPILER__airdcpp_unscanned_Release core.cpp\n"
+            + "  FLAGS = " + flags.replace("$SDK", tools.sdkroot) + "\n"
+            + "  INCLUDES = -I" + str(stage) + "\n  DEFINES = -DNO_CLIENT_UPDATER\n\n")
         self.candidate = self.project / ".package-fixture"
         self.candidate.mkdir()
 
@@ -285,13 +317,9 @@ class PackageTests(unittest.TestCase):
         target = self.project / "Dist"
         self.package.publish_candidate(self.candidate, target, self.project)
         old = (target / "metadata/aggregate-provenance.json").read_bytes()
+        old_inode = target.stat().st_ino
         candidate = self.project / ".package-next"
         shutil.copytree(target, candidate)
-        provenance_path = candidate / "metadata/aggregate-provenance.json"
-        changed = json.loads(provenance_path.read_bytes())
-        changed["tool"]["version"] = "fixture second tool receipt"
-        provenance_path.write_bytes(self.aggregate.canonical(changed))
-        self.resign(candidate)
         original = self.package.verify_package
         def validation_failure(path, authority):
             if path == target:
@@ -303,6 +331,7 @@ class PackageTests(unittest.TestCase):
             with self.assertRaises((TypeError, RuntimeError)):
                 self.package.publish_candidate(candidate, target, self.project)
         self.assertEqual((target / "metadata/aggregate-provenance.json").read_bytes(), old)
+        self.assertEqual(target.stat().st_ino, old_inode)
 
     def test_rerun_publishes_identical_file_content(self):
         self.stage()
@@ -314,6 +343,56 @@ class PackageTests(unittest.TestCase):
         self.package.publish_candidate(self.candidate, self.project / "Dist", self.project)
         self.package.publish_candidate(second, self.project / "Dist", self.project)
         self.assertEqual({str(p.relative_to(self.project / "Dist")): p.read_bytes() for p in (self.project / "Dist").rglob("*") if p.is_file()}, before)
+
+    def test_missing_construction_authority_and_changed_ingredient_digest_fail(self):
+        self.stage()
+        provenance_path = self.candidate / "metadata/aggregate-provenance.json"
+        manifest_path = self.candidate / "metadata/manifest.json"
+        saved_provenance, saved_manifest = provenance_path.read_bytes(), manifest_path.read_bytes()
+        for field in ("schema", "algorithm", "tool"):
+            data = json.loads(saved_provenance)
+            del data[field]
+            provenance_path.write_bytes(self.aggregate.canonical(data))
+            self.resign(self.candidate)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "provenance"):
+                self.package.verify_package(self.candidate, self.project)
+        provenance = json.loads(saved_provenance)
+        manifest = json.loads(saved_manifest)
+        provenance["components"][1]["archive_sha256"] = "0" * 64
+        manifest["components"][1]["archive_sha256"] = "0" * 64
+        provenance_path.write_bytes(self.aggregate.canonical(provenance))
+        manifest_path.write_bytes(self.aggregate.canonical(manifest))
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "ingredient.*digest"):
+            self.package.verify_package(self.candidate, self.project)
+
+    def test_core_url_and_declared_compile_flags_are_required_and_bound(self):
+        self.stage()
+        manifest_path = self.candidate / "metadata/manifest.json"
+        saved = manifest_path.read_bytes()
+        data = json.loads(saved)
+        self.assertEqual(data["core"].get("source_url"), "https://github.com/airdcpp/airdcpp-core.git")
+        self.assertEqual(data["core"].get("build_policy", {}).get("compile_flags"),
+                         "-O3 -DNDEBUG -std=c++20 -arch arm64 -isysroot $SDK -mmacosx-version-min=14.0")
+        for field in ("source_url", "build_policy"):
+            changed = json.loads(saved)
+            del changed["core"][field]
+            manifest_path.write_bytes(self.aggregate.canonical(changed))
+            self.resign(self.candidate)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "Core.*policy|Core.*source"):
+                self.package.verify_package(self.candidate, self.project)
+        changed = json.loads(saved)
+        changed["core"]["build_policy"]["compile_flags"] = "-O0"
+        manifest_path.write_bytes(self.aggregate.canonical(changed))
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "Core.*policy"):
+            self.package.verify_package(self.candidate, self.project)
+
+    def test_observed_ninja_compile_flags_must_match_bound_policy(self):
+        ninja = self.project / "Build/airdcpp-core/reproducible-release/build.ninja"
+        ninja.write_text(ninja.read_text().replace("-O3", "-O0"))
+        with self.assertRaisesRegex(ValueError, "Core.*compile.*policy"):
+            self.stage()
 
 
 if __name__ == "__main__":

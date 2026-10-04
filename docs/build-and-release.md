@@ -124,6 +124,14 @@ and checksums for every file except the checksum file itself. Candidate
 validation precedes atomic publication at the fixed project `Dist` target.
 Unsafe targets and failed validation preserve an existing distribution.
 
+Core provenance includes its exact tracked upstream URL and a compact declared
+compile policy in `config/packaging-core-policy.json`. This packaging-specific
+capture binds the accepted Core archive/input fingerprint, compiler, SDK and
+construction tool; staging cross-checks normalized observed Ninja flags and
+material definition overrides. The successful build log is not verbose, so
+Ninja is observed metadata, not an independently immutable compiler transcript.
+Changing the accepted Core/tool identity requires a reviewed policy refresh.
+
 `--verify` performs read-only checks of an existing or relocated package,
 including its actual object payloads, ARM64/deployment policy, TOC, symbol
 decisions, pins, header/license inventory, and checksums. Its authority is the
