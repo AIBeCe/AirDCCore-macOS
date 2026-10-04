@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Independently verify this project's public or relocated Dist."""
+from pathlib import Path
+import sys
+
+PROJECT = Path(__file__).absolute().parents[1]
+sys.path.insert(0, str(PROJECT / "scripts/lib"))
+from release_verify import main
+
+if __name__ == "__main__":
+    raise SystemExit(main(PROJECT))

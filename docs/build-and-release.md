@@ -2,7 +2,7 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-Acquisition, native configure discovery, Core and consumer builds, the aggregate distribution decision, and the accepted Phase 6 inputs are implemented. Phase 7 provides validated deterministic packaging and a measured relocated consumer; native Gate 7 passes, with independent review required before integration. Phase 8 release verification remains deferred.
+Acquisition, native configure discovery, Core and consumer builds, the aggregate distribution decision, and the accepted Phase 6 inputs are implemented. Phase 7 provides validated deterministic packaging and a measured relocated consumer. Phase 8 provides public verification, scoped cleanup, and an opt-in two-clean-build/release-rehearsal driver; its native acceptance remains pending measured evidence and independent review.
 
 ## Required sequence
 
@@ -132,6 +132,11 @@ construction tool; staging cross-checks normalized observed Ninja flags and
 material definition overrides. The successful build log is not verbose, so
 Ninja is observed metadata, not an independently immutable compiler transcript.
 Changing the accepted Core/tool identity requires a reviewed policy refresh.
+Schema 2 pins the path-independent published Core identity: only the validated
+private version authority's staging root becomes `$CORE_SOURCE`, and its digest
+is rebound inside a copied input document. Private Phase 6 receipts remain
+path-sensitive and unchanged. Legacy schema 1 packages require their matching
+schema 1 tracked authority; a mixed identity schema is rejected.
 
 `--verify` performs read-only checks of an existing or relocated package,
 including its actual object payloads, ARM64/deployment policy, TOC, symbol
@@ -170,10 +175,70 @@ reproducibility.
 
 Freeze every other project writer during real Core/consumer modes: their snapshots exclude only their own output. Changing documentation, Git state, sources, another output, or project-local logs violates scope. Save outer stdout/stderr outside the project in a private temporary path; copy durable evidence to ignored `Build/gate6` only between subprocesses or after execution. First capture without a tracked report refuses acceptance after preserving native evidence. Normalize facts, track the report, and rerun; fixtures and incomplete captures cannot establish PASS.
 
-Gate 3/4 copied-evidence tests require `AIRDCCORE_RUN_BUILD_TESTS=1` / `AIRDCCORE_RUN_LINK_TESTS=1`. Run unchanged Gate 5 in a fresh tracked-only checkout with `Dependencies` absent, preserving active artifacts. `scripts/clean` remains deferred; retain caches and attempt/history evidence, and remove only explicitly identified disposable fixtures.
+Gate 3/4 copied-evidence tests require `AIRDCCORE_RUN_BUILD_TESTS=1` / `AIRDCCORE_RUN_LINK_TESTS=1`. Run unchanged Gate 5 in a fresh tracked-only checkout with `Dependencies` absent, preserving active artifacts. Preserve needed private attempt/history evidence before intentionally cleaning that checkout.
 
 Phase 6 creates neither `Dist` nor an aggregate. After twelve criteria and independent review pass, Phase 7 owns the ADR aggregate algorithm, strong collisions, weak/coalesced classifications, member mapping, notices/provenance and packaging. Phase 8 owns two-clean-build byte verification. Verification on the recorded host does not prove runtime behavior on an actual macOS 14 installation or release readiness.
 
 ## Release evidence
 
 A releasable `Dist` must include machine-readable provenance and link-interface metadata, SHA-256 checksums, and all required notices. Verification must exercise `file`, `lipo`, `nm` or equivalent Apple tooling, plus a fresh C++ consumer that compiles and links without using the source or build trees.
+
+## Gate 8 operator contract
+
+```sh
+./scripts/verify                    # verify this checkout's Dist
+./scripts/verify /absolute/Dist     # verify a public relocated package
+./scripts/clean                     # deliberately remove this checkout's Build and Dist
+AIRDCCORE_RUN_RELEASE_TESTS=1 ./tests/gate8_release_test.sh
+```
+
+`verify` delegates the complete existing payload, Mach-O, symbols, source pins,
+headers, licenses and checksum verification and measures a fresh relocated,
+network-denied consumer. It reads public Dist, tracked authority and the declared
+Apple SDK/toolchain. Failures exit nonzero with a diagnostic; no private Core or
+dependency inputs are rebuilt.
+
+`clean` accepts no target arguments. It verifies its own Git project root,
+refuses tracked paths below Build/Dist, and validates both fixed top-level
+targets before deleting either. Unsafe roots, top-level symlinks and file
+targets fail without deletion. Nested symlinks are unlinked without following
+their targets. Source, Dependencies, tracked files and unrelated dirty source
+are preserved. Removed Build/Dist content includes private build evidence;
+retain any needed receipts first. Tests use disposable projects only.
+
+The Gate 8 experiment accepts no arguments and skips unless explicitly enabled.
+Run it from a committed, reviewed implementation; uncommitted inputs are refused.
+It freezes one exact Git commit and creates two separately owned tracked-only
+checkouts under `/private/tmp/airdc-gate8-*/run-{1,2}/project`, attesting Source,
+Dependencies, Build and Dist are initially absent. Each root independently runs
+update, locked dependency acquisition/build, reproducible Core, private consumer,
+packaging and public verification. No source trees, prefixes or build products
+are shared. Build/airdcpp-core is created before the existing Core command needs
+its parent; the Phase 6 build implementation is unchanged.
+
+Each run repeats acquisition and dependency build and compares both bytes and
+filesystem identities/timestamps to establish a no-op. It then repeats Core,
+private consumer, packaging and verification, comparing the exact Core archive
+and full public inventory before/after. Across roots, full Dist directories,
+file modes and content digests must agree; matching only aggregate archives is
+insufficient. Drift fails the experiment without repinning or semantic fallback.
+
+All outer logs, command statuses, input/tool/OS identities, raw private versus
+normalized public fingerprints, no-op snapshots and package inventories are
+retained outside the checked project roots. Successful and failed roots remain
+available for inspection. A failure stops immediately and cannot produce a
+passing comparison from a partial receipt. Console progress identifies each
+phase and its log. Check the retained failure log and correct the cause before
+starting another experiment; never overwrite old evidence to conceal drift.
+
+The driver also exercises feature integration, release-from-develop,
+first-master bootstrap, annotated `v0.0.0` rehearsal tagging and release
+merge-back in a separately created disposable Git repository. It does not
+create production master/tags, push, or publish a release. Receipts identify the
+rehearsal repository and explicitly exclude production publication.
+
+A passing experiment proves two fresh tracked-only builds on the measured host.
+It does not assert a physically fresh machine, actual macOS 14 execution, or
+complete all fourteen release acceptance criteria by itself. Gate 8 acceptance
+requires the complete measured criterion map and independent review before
+integration; production promotion remains a separate decision.
