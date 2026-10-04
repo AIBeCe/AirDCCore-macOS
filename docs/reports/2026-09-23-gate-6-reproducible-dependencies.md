@@ -1,6 +1,6 @@
 # Gate 6: Reproducible dependency inputs
 
-Fresh post-review acquisition and a genuine confined all-eight refresh at code checkpoint 8bb5768 satisfy the twelve evidence-backed criteria below, including two ordinary dependency no-ops, Core, the real force-loaded consumer, scopes and closure. The capture refused only the then-pending report; this updated accepted report supplies that contract without relabeling the capture's exit 1. The final full-gate rerun with this tracked report and final report/delta review remain explicit integration gates.
+Fresh post-review acquisition and a genuine confined all-eight refresh at code checkpoint 8bb5768 satisfy the twelve evidence-backed criteria below, including two ordinary dependency no-ops, Core, the real force-loaded consumer, scopes and closure. The capture refused only the then-pending report; this updated accepted report supplies that contract without relabeling the capture's exit 1. The later full Gate 6 at checkpoint e17ab2d completed actual exit zero with that accepted report; its raw log and bound final proof are recorded below. Final completion-doc/delta review and local integration remain coordinator steps.
 
 The canonical lock reconstructs eight isolated static prefixes. OpenSSL 3.5.8 is the reviewed LTS exception to earlier 3.6.4 discovery. The renewed physical closure matches ADR 0001: Core, BZip2, zlib, OpenSSL SSL/Crypto, miniupnpc, LevelDB, MaxMindDB, Snappy, then SDK Iconv. Boost is build-only. libc++ and libSystem are implicit Apple inputs; no framework or non-system dylib is required.
 
@@ -10,7 +10,7 @@ Core builds from a manifest-verified private tracked-file stage; original Source
 
 Retries are retained: the initial generator rewrote ignored Source while an underlying HashStore memcpy diagnostic also failed compilation; the native launcher hypothesis failed and was replaced by the narrow version COMMAND patch; the later NetworkUtil C++ VLA failure required the third patch target. Core attempts 0001 and 0002 retain failed build logs; 0003 retains a successful build before the current rerun. Failed dependency metadata, LevelDB probe/provenance and Boost relocation attempts are preserved with their original hashes. Original failed version.inc predecessor bytes were not available and are not reconstructed or mislabeled. Snappy/LevelDB GoogleTest omissions and their explicit installed-consumer compensation are recorded per component.
 
-The approved OpenSSL runtime defaults and their observed certificate/config descendants are intentional runtime strings, not build provenance. Raw logs, host paths and ignored evidence remain private; only normalized facts and evidence-relative digests are tracked here. This report proves ingredients and consumer behavior on the recorded host. It does not publish Dist, build an aggregate, classify collisions/coalescing, establish two-clean-build byte reproducibility, or establish actual execution on macOS 14. The feature worktree and ignored artifacts are preserved for review and Phase 7 handoff.
+The approved OpenSSL runtime defaults and their observed certificate/config descendants are intentional runtime strings, not build provenance. Raw logs, host paths and ignored evidence remain private; only normalized facts and evidence-relative digests are tracked here. This report proves ingredients and consumer behavior on the recorded host. It does not publish Dist, build an aggregate, classify collisions/coalescing, establish two-clean-build byte reproducibility, or establish actual execution on macOS 14. The feature worktree and ignored artifacts are preserved for review and handoff: Phase 7 owns aggregation/collision/member mapping and packaging; Phase 8 owns two-clean-build byte verification.
 
 Whole-branch findings have independent code-review PASS: exact bounded adapter options/name now fail closed before execution (111c75e); acquired content is verified across private clone/descriptors and exclusive publication, uncertain failures retain private forensic attempts rather than deleting unknown winners, and Git metadata validation spans fixed digest snapshots (ab293b2, 960bed8, 8bb5768); strict link normalization refuses top-level @response files that could hide physical inputs (b90253b). Fresh acquisition and native checks were captured after those fixes; earlier pre-fix evidence is retained, not substituted for current proof. Historical Gate 3/4 contracts are unchanged and replay their observed historical input bytes in a disposable fixture; that replay neither restores active forensic Source nor proves current native acceptance.
 
@@ -68,6 +68,10 @@ Whole-branch findings have independent code-review PASS: exact bounded adapter o
         {
           "path": "Build/gate6/git-boundary-validation.json",
           "sha256": "eb629ff46011c8b4718e9489a0078673589fdd3b2d87f814340ef34dddb6cb26"
+        },
+        {
+          "path": "Build/gate6/final-gate-validation.json",
+          "sha256": "e419cbab7faa28cd4e2a8d7cb3ddad459fcc68e3a99435d1dc36683c057b0c10"
         }
       ],
       "result": "PASS"
@@ -821,7 +825,19 @@ Whole-branch findings have independent code-review PASS: exact bounded adapter o
       "path": "Build/gate6/capture-validation.json",
       "sha256": "daa38007b245bc546ae10754d6774cafecdbeee47c7399588e0e46a221694649"
     },
-    "final_full_gate": "coordinator rerun required after report checkpoint",
+    "final_full_gate": {
+      "code_checkpoint": "e17ab2df2434ff428f5e5b5b7853b4054bf56f07",
+      "evidence": {
+        "path": "Build/gate6/final-gate-validation.json",
+        "sha256": "e419cbab7faa28cd4e2a8d7cb3ddad459fcc68e3a99435d1dc36683c057b0c10"
+      },
+      "exit_status": 0,
+      "raw_log": {
+        "path": "Build/gate6/final-gate.raw.log",
+        "sha256": "3919546ab3826c6d385eed88fef128fd14eea5b930c137b305acf53c9eb27b04"
+      },
+      "result": "PASS"
+    },
     "raw_log": {
       "path": "Build/gate6/build-refresh.raw.log",
       "sha256": "a0e8e0da1196f6652d30f0e445ecce6faec48eb32344919ea70cc0ab982eda71"
@@ -834,12 +850,12 @@ Whole-branch findings have independent code-review PASS: exact bounded adapter o
     "sdk_version": "26.5"
   },
   "known_limitations": [
-    "No Dist or aggregate archive; collision/coalescing/member mapping and two-clean-build byte reproducibility belong to Phase 7",
+    "No Dist or aggregate archive; aggregation/collision/coalescing/member mapping belong to Phase 7; two-clean-build byte verification belongs to Phase 8",
     "Native execution on recorded macOS 26.5.1 does not prove actual runtime behavior on macOS 14",
     "Deployment policy is supported by recorded flags and every available member/executable build-version command; unavailable member metadata is not invented",
     "Original failed generated version.inc predecessor bytes are unavailable; retained forensic bytes are not claimed to be its immediate predecessor",
     "Uncertain failed private acquisition attempts are retained for forensic inspection; cleanup cannot delete an unverified publication winner",
-    "Final whole-branch report/delta review and final full-gate rerun follow this tracked report checkpoint"
+    "Local GitFlow integration is separately coordinated; Phase 7/8 execution, release and pushing are not part of this report"
   ],
   "lock_sha256": "d4a4b7a5f7bdc7f6a7e9076db9fa4113a5771c2000c72abf06b70c164230cddd",
   "omissions": [

@@ -25,7 +25,7 @@
 
 ## Review Focus
 
-**Execution record:** Tasks 1–9 are implemented, regression-verified and independently reviewed. Preserved task reports/ledger record their actual RED/GREEN history and later native corrections; the checkboxes below summarize completion rather than claim the initial proposed lock/commands stayed unchanged. Post-review code checkpoint `8bb5768` passed fresh online/offline/no-op acquisition and genuine confined all-eight/native Core/consumer checks. The capture refused only the then-pending report; the refreshed accepted report passes normal/live contracts. Final full-gate zero exit and final report/delta review remain required before integration.
+**Execution record:** Tasks 1–9 are implemented, regression-verified and independently reviewed. Preserved task reports/ledger record their actual RED/GREEN history and later native corrections; the checkboxes below summarize completion rather than claim the initial proposed lock/commands stayed unchanged. Post-review code checkpoint `8bb5768` passed fresh online/offline/no-op acquisition and genuine confined all-eight/native Core/consumer checks. Its capture refused only the then-pending report; the refreshed accepted report passes normal/live contracts. Final full Gate 6 at `e17ab2d` completed actual exit zero, and whole-branch integration review is PASS. Task 10 is complete; only Task 11's authorized local integration and merge-result reverification remain.
 
 - Archive paths that differ only by Unicode spelling or case must be rejected before extraction; Task 2 pins case-fold and NFC collision tests.
 - A cache or destination swapped to a symlink between validation and publication must fail without touching the outside target; Task 2 pins race-wrapper tests.
@@ -668,11 +668,11 @@
 
   `tests/gate6_dependency_build_test.sh` skips unless `AIRDCCORE_RUN_DEPENDENCY_TESTS=1`. It must run lock validation, accepted-source validation, `scripts/build --build-dependencies`, a second no-op build with prefix fingerprint comparison, `--build-reproducible-core`, `--link-reproducible-consumer`, all prefix validators, closure comparison, Git-boundary checks, and report validation. It must fail if network is used after acquisition or if `Dist`/an aggregate appears.
 
-  Execution decision: the complete live process tree runs under the macOS outbound-denying sandbox with localhost permitted for OpenSSL TLS tests. Deterministic socket probes fail closed. Offline `--self-test` fixtures cover descendant confinement, prefix/evidence no-op guards, report identity/ADR/twelve-criterion refusal, and generated-path boundaries. Core/consumer snapshots exclude only their own output; freeze all other project writes and keep outer logs outside the project. Fresh native checks and accepted report normal/live validation pass; the final full live-gate invocation remains pending until the coordinator runs it after all writers freeze.
+  Execution decision: the complete live process tree runs under the macOS outbound-denying sandbox with localhost permitted for OpenSSL TLS tests. Deterministic socket probes fail closed. Offline `--self-test` fixtures cover descendant confinement, prefix/evidence no-op guards, report identity/ADR/twelve-criterion refusal, and generated-path boundaries. Core/consumer snapshots exclude only their own output; freeze all other project writes and keep outer logs outside the project. Fresh native checks and accepted report normal/live validation pass; final full Gate 6 completes actual exit zero at `e17ab2d` after all writers freeze.
 
   Review correction: matching reuse also requires a hash-bound confinement attestation for all eight dependency adapters. Missing/stale binding triggers the approved keyword-only `build_all(force_rebuild=True)` path inside the gate sandbox, preserving attempts and retaining normal drift checks. The gate observes every completed adapter before attestation, then proves two ordinary dependency-build no-ops; valid attestation is unchanged. Report checks require actual OS/SDK versions, successful required upstream commands, only approved Snappy/LevelDB GoogleTest exceptions with explicit installed-consumer compensation, and stable evidence references that exclude self-dependent scope snapshots.
 
-- [ ] **Step 4: Execute live acquisition and build gates and capture evidence.**
+- [x] **Step 4: Execute live acquisition and build gates and capture evidence.**
 
   ```sh
   AIRDCCORE_RUN_DEPENDENCY_NETWORK_TESTS=1 rtk ./tests/gate6_dependency_acquisition_test.sh
@@ -743,7 +743,7 @@
 
 ### Task 11: Independent whole-branch review and GitFlow handoff
 
-**Current review status:** fresh whole-branch CODE review PASS at `8bb5768` after I1 exact option/name enforcement, I2 content/ownership/publication and fixed Git snapshot corrections, and I3 strict top-level response-file refusal. Findings were corrected by their persistent worker/reviewer pair. Final report/delta review and the final full Gate 6 result are still pending, so Task 11 completion/integration steps below remain unchecked.
+**Current review status:** fresh whole-branch CODE review PASS at `8bb5768` after I1 exact option/name enforcement, I2 content/ownership/publication and fixed Git snapshot corrections, and I3 strict top-level response-file refusal. Findings were corrected by their persistent worker/reviewer pair. Task 10 evidence/report/docs review PASS at `e17ab2d`; final full Gate 6 exits zero, and whole-branch integration review is overall PASS. User explicitly approves local no-fast-forward integration through the earlier merge-after-phase request and repeated blanket Phase 6 approval. Actual integration and merge-result reverification remain unchecked; do not reopen completed tasks or add hardening, improvements or requirements. Nonblocking follow-ups stay deferred; stop once Gate 6 PASS and Task 11 are complete.
 
 **Files:**
 - Review only: every change from `develop...feature/reproducible-dependencies`
@@ -753,19 +753,19 @@
 - Consumes: the complete Phase 6 branch, accepted spec, this plan, Gate 6 report, raw ignored evidence, and all test commands.
 - Produces: an independent review verdict and, after explicit user approval, a no-fast-forward GitFlow merge into `develop`. It does not start Phase 7.
 
-- [ ] **Step 1: Run a fresh spec-compliance review.**
+- [x] **Step 1: Run a fresh spec-compliance review.**
 
   A reviewer with no implementation context must compare every spec section and plan task against the branch diff and evidence. The review must prioritize acquisition attacks, atomicity/idempotence, prefix isolation, Homebrew leakage, archive architecture, OpenSSL 3.5.8 recapture, closure/ADR consistency, license completeness, generated-data boundaries, and Phase 7 scope leakage.
 
-- [ ] **Step 2: Run a fresh code-quality review.**
+- [x] **Step 2: Run a fresh code-quality review.**
 
   Inspect Python exception boundaries, subprocess argv/environment, file-descriptor/path race defenses, archive handling, shell quoting, evidence retention, CMake imported-target traversal, test realism, and error messages. Report findings by severity with exact file/line evidence. A clean review must explicitly say no findings.
 
-- [ ] **Step 3: Resolve findings test-first and rerun affected plus full gates.**
+- [x] **Step 3: Resolve findings test-first and rerun affected plus full gates.**
 
   For each valid finding, add a failing regression, make the smallest correction, run the focused test, then rerun Task 10 Step 7 and both opt-in live Gate 6 tests. Commit each coherent correction with a descriptive `fix:` message.
 
-- [ ] **Step 4: Verify branch state before integration.**
+- [x] **Step 4: Verify branch state before integration.**
 
   ```sh
   rtk git status --short --branch
@@ -777,9 +777,11 @@
 
   Expected: clean feature branch, reviewed commit series, no whitespace errors, intended Phase 6 diff only, and no generated paths tracked.
 
-- [ ] **Step 5: Stop for explicit merge approval.**
+- [x] **Step 5: Stop for explicit merge approval.**
 
   Report Gate 6 status, exact Core and consumer artifact locations, test evidence, review verdict, commits, and remaining Phase 7 work. Do not merge, delete the branch/worktree, push, or start Phase 7 until the user explicitly approves the GitFlow integration.
+
+  Explicit approval is already recorded: local `--no-ff` integration after Phase 6 PASS is covered by the user's merge-after-phase request and subsequent blanket approvals. No repeated approval question is required. Root coordinates the merge and merge-result reverification; preserve the feature worktree/artifacts, and do not push or start Phase 7.
 
 - [ ] **Step 6: After approval, merge according to GitFlow and reverify.**
 

@@ -103,7 +103,7 @@ Freeze every other project writer during real Core/consumer modes: their snapsho
 
 Gate 3/4 copied-evidence tests require `AIRDCCORE_RUN_BUILD_TESTS=1` / `AIRDCCORE_RUN_LINK_TESTS=1`. Run unchanged Gate 5 in a fresh tracked-only checkout with `Dependencies` absent, preserving active artifacts. `scripts/clean` remains deferred; retain caches and attempt/history evidence, and remove only explicitly identified disposable fixtures.
 
-Phase 6 creates neither `Dist` nor an aggregate. After twelve criteria and independent review pass, Phase 7 owns the ADR aggregate algorithm, strong collisions, weak/coalesced classifications, member mapping, notices/provenance, packaging, and two-clean-build checks. Verification on the recorded host does not prove runtime behavior on an actual macOS 14 installation or release readiness.
+Phase 6 creates neither `Dist` nor an aggregate. After twelve criteria and independent review pass, Phase 7 owns the ADR aggregate algorithm, strong collisions, weak/coalesced classifications, member mapping, notices/provenance and packaging. Phase 8 owns two-clean-build byte verification. Verification on the recorded host does not prove runtime behavior on an actual macOS 14 installation or release readiness.
 
 ## Release evidence
 
