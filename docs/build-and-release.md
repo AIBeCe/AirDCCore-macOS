@@ -2,7 +2,7 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-Acquisition, native configure-only discovery, an unpackaged ARM64 static Core build, external-consumer discovery, the distribution decision, and Phase 6 dependency/Core/consumer modes are implemented. Gate 6 native acceptance is pending; aggregation, packaging, and release remain deferred.
+Acquisition, native configure discovery, Core and consumer builds, the aggregate distribution decision, and the accepted Phase 6 inputs are implemented. Phase 7 provides validated deterministic packaging; the relocated consumer and Gate 7 acceptance are still pending. Phase 8 release verification remains deferred.
 
 ## Required sequence
 
@@ -98,6 +98,45 @@ Without its live variable the gate skips. It validates lock/accepted sources, tw
 Reused prefixes also require `Build/gate6/dependency-confinement.json`: it binds the policy/probes, lock and gate/helper code, all eight successful adapter executions, and their input/tool/command/test-log/prefix/license evidence digests. Missing or mismatching attestation causes a safe forced rebuild inside this gate's sandbox before the two normal no-op invocations. Force preserves acceptance/attempt evidence through the existing orchestrator and never bypasses output-drift validation. Stale attestations are retained in hash-named `Build/gate6/confinement-history`; a failed refresh leaves no current acceptance marker. Matching attestations remain unchanged on rerun. The report binds stable status/inspection files; it must not reference volatile Core/consumer scope hashes whose inputs include the report itself.
 
 For an isolated dependency checkpoint, run `AIRDCCORE_RUN_DEPENDENCY_TESTS=1 ./tests/gate6_dependency_build_test.sh --dependencies-only`. It performs the same sandbox probes, bound confinement establishment, two ordinary no-op builds, prefix/source/Git/output checks, then records `Build/gate6/dependency-checkpoint.json` and exits before Core, consumer, and report execution. Its explicit result is “dependency checkpoint only; NOT Gate 6 acceptance.” This permits Core-only preparation to proceed independently; the normal full invocation still requires real Core/consumer and report acceptance.
+
+## Phase 7 packaging operator contract
+
+After the accepted Phase 6 dependency and reproducible Core outputs exist, run:
+
+```sh
+./scripts/package
+./scripts/package --verify /absolute/path/to/relocated/Dist
+```
+
+The default command validates the accepted inputs without rebuilding or
+discovering Homebrew dependencies. It constructs two identical fresh containers
+with ADR 0001's ordered nine ingredients and Apple libtool, stages the enabled
+macOS Core headers and required external include trees, and retains original
+license notices. Core modules and Windows-only `ZipFile.h` are excluded by the
+pinned target's header policy. Boost headers and their notice are redistributed
+without adding a Boost archive. MaxMindDB's original `NOTICE` is authenticated
+against its locked source tree; the tracked official GPL text accompanies the
+original Core notices preserved in headers.
+
+The candidate contains one `lib/libairdcpp.a`, stable relative provenance,
+member mapping, actual Mach-O coalescing decisions, header/license inventories,
+and checksums for every file except the checksum file itself. Candidate
+validation precedes atomic publication at the fixed project `Dist` target.
+Unsafe targets and failed validation preserve an existing distribution.
+
+`--verify` performs read-only checks of an existing or relocated package,
+including its actual object payloads, ARM64/deployment policy, TOC, symbol
+decisions, pins, header/license inventory, and checksums. Its authority is the
+packaging checkout's tracked `config` and license-source policy; it does not
+read `Source`, `Dependencies`, or `Build`. Checksums establish integrity, not
+an artifact signature. Recorded per-member undefined references include symbols
+resolved by other members; they are not the remaining system link boundary.
+
+The public link contract remains explicit SDK Iconv with implicit libc++ and
+libSystem, and no Apple frameworks. Packaging metadata marks consumer
+verification pending until Task 3 measures a relocated force-loaded consumer.
+Successful package validation alone is not Gate 7 acceptance or Phase 8
+minimum-OS/full-clean-build release proof.
 
 Freeze every other project writer during real Core/consumer modes: their snapshots exclude only their own output. Changing documentation, Git state, sources, another output, or project-local logs violates scope. Save outer stdout/stderr outside the project in a private temporary path; copy durable evidence to ignored `Build/gate6` only between subprocesses or after execution. First capture without a tracked report refuses acceptance after preserving native evidence. Normalize facts, track the report, and rerun; fixtures and incomplete captures cannot establish PASS.
 

@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Complete package validation and preservation using real Darwin objects."""
+from dataclasses import asdict
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts/lib"))
+
+
+class PackageTests(unittest.TestCase):
+    def setUp(self):
+        self.assertTrue((ROOT / "scripts/lib/distribution_package.py").is_file(),
+                        "complete package implementation is missing")
+        import distribution_package as package
+        import distribution_aggregate as aggregate
+        from dependency_acquire import tree_manifest
+        from dependency_lock import load_lock
+        from dependency_prefix import PrefixReport, _entry_manifest
+        from core_stage import version_bytes
+        self.package, self.aggregate = package, aggregate
+        self.temporary = tempfile.TemporaryDirectory(prefix="airdc-package-test-")
+        self.addCleanup(self.temporary.cleanup)
+        self.work = Path(self.temporary.name).resolve()
+        self.project = self.work / "project"
+        self.project.mkdir()
+        shutil.copytree(ROOT / "config", self.project / "config")
+        shutil.copytree(ROOT / "licenses", self.project / "licenses")
+        self.source = self.project / "Dependencies/libmaxminddb"
+        self.source.mkdir(parents=True)
+        (self.source / "NOTICE").write_text("Copyright MaxMind fixture\n")
+        lock_data = json.loads((self.project / "config/dependencies.lock").read_text())
+        for record in lock_data["dependencies"]:
+            if record["name"] == "libmaxminddb":
+                record["source"]["tree_manifest_sha256"] = aggregate.sha(tree_manifest(self.source))
+        (self.project / "config/dependencies.lock").write_text(json.dumps(lock_data, sort_keys=True, indent=2) + "\n")
+        self.lock = load_lock(self.project / "config/dependencies.lock")
+        core = self.project / "Build/airdcpp-core/reproducible-release"
+        stage = core / "source"
+        policy = json.loads((self.project / "config/core-reproducible-policy.json").read_text())
+        core_files = {
+            "airdcpp/core/Version.h": b"/* Copyright fixture. GNU General Public License version 3 or later. */\n#pragma once\n",
+            "airdcpp/core/version.inc": version_bytes(policy),
+            "airdcpp/modules/private.h": b"#include <unavailable-module.h>\n",
+            "airdcpp/core/io/compress/ZipFile.h": b"#include <minizip.h>\n",
+        }
+        core_rows = []
+        for relative, content in core_files.items():
+            path = stage / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            core_rows.append(dict(path=relative, mode="100644", sha256=aggregate.sha(content)))
+        core_rows.sort(key=lambda r: r["path"])
+        (core / "staged-source-manifest.json").write_bytes(aggregate.canonical(core_rows))
+        reports = {}
+        for record in self.lock.dependencies:
+            prefix = self.project / "Build/prefix" / record.name
+            for relative in (*record.expected_headers, *record.license_paths):
+                path = prefix / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("/* " + record.name + " fixture */\n")
+            extra = prefix / "include" / record.name / "nested.hpp"
+            extra.parent.mkdir(parents=True, exist_ok=True)
+            extra.write_text("#pragma once\n")
+            manifest = "".join(aggregate.canonical(dict(json.loads(line),
+                path="$PREFIX/" + json.loads(line)["path"])).decode()
+                for line in _entry_manifest(prefix).decode().splitlines())
+            reports[record.name] = PrefixReport(record.name, record.role, manifest,
+                                               aggregate.sha(manifest.encode()), ())
+        ingredients = self.work / "ingredients"
+        ingredients.mkdir()
+        components = []
+        for ordinal, (slug, owner, relative) in enumerate(aggregate.ORDER, 1):
+            cfile, obj, archive = ingredients / (slug + ".c"), ingredients / (slug + ".o"), ingredients / (slug + ".a")
+            cfile.write_text("int component_" + str(ordinal) + "(void) { return " + str(ordinal) + "; }\n")
+            subprocess.run(["/usr/bin/clang", "-arch", "arm64", "-mmacosx-version-min=14.0",
+                            "-c", str(cfile), "-o", str(obj)], check=True, capture_output=True)
+            subprocess.run(["/usr/bin/libtool", "-static", "-D", "-o", str(archive), str(obj)],
+                           check=True, capture_output=True)
+            records = {r.name: r for r in self.lock.dependencies}
+            provenance = ({"source": {"commit": policy["upstream_commit"]},
+                           "source_manifest_sha256": aggregate.sha(aggregate.canonical(core_rows)),
+                           "core_input_fingerprint": "a" * 64}
+                          if owner is None else {"record": asdict(records[owner]),
+                              "install_manifest_sha256": reports[owner].manifest_sha256})
+            components.append(aggregate.Component(ordinal, slug, archive,
+                              dict(provenance, archive_sha256=aggregate.sha(archive.read_bytes()))))
+        members = aggregate.inspect_members(components)
+        archive = self.work / "aggregate.a"
+        aggregate.build_aggregate(members, archive)
+        proof = aggregate.verify_aggregate(archive, members)
+        self.result = dict(archive=archive, components=components, members=members, reports=reports,
+            core=dict(staged_root=str(stage), staged_manifest_sha256=aggregate.sha(aggregate.canonical(core_rows)),
+                      upstream_commit=policy["upstream_commit"]),
+            decisions=aggregate.classify_repetitions(members),
+            provenance=dict(schema=1, components=[dict(ordinal=c.ordinal, component=c.slug, **c.provenance) for c in components],
+                container=proof, independent_containers=2,
+                tool=dict(name="Apple libtool", sha256="b" * 64, version="fixture Apple libtool")))
+        self.candidate = self.project / ".package-fixture"
+        self.candidate.mkdir()
+
+    def stage(self):
+        self.package.stage_candidate(self.project, self.candidate, self.result)
+        return self.candidate
+
+    def resign(self, package):
+        # Deliberate adversarial rewrite proves verifier checks more than hashes.
+        rows = []
+        for path in sorted(package.rglob("*"), key=lambda p: p.relative_to(package).as_posix().encode()):
+            if path.is_file() and path.relative_to(package).as_posix() != "metadata/checksums.sha256":
+                rows.append(self.aggregate.sha(path.read_bytes()) + "  " + path.relative_to(package).as_posix())
+        (package / "metadata/checksums.sha256").write_text("\n".join(rows) + "\n")
+
+    def test_complete_candidate_is_relocatable_and_preserves_enabled_headers(self):
+        self.stage()
+        self.assertTrue((self.candidate / "include/airdcpp/core/Version.h").is_file())
+        self.assertTrue((self.candidate / "include/airdcpp/core/version.inc").is_file())
+        self.assertTrue((self.candidate / "include/boost/nested.hpp").is_file())
+        self.assertFalse((self.candidate / "include/airdcpp/modules").exists())
+        self.assertFalse((self.candidate / "include/airdcpp/core/io/compress/ZipFile.h").exists())
+        relocated = self.work / "relocated"
+        self.candidate.rename(relocated)
+        shutil.rmtree(self.project / "Build")
+        shutil.rmtree(self.project / "Dependencies")
+        verified = self.package.verify_package(relocated, self.project)
+        self.assertEqual(verified["member_count"], 9)
+        self.assertEqual([p.name for p in (relocated / "lib").iterdir()], ["libairdcpp.a"])
+
+    def test_header_source_drift_rejects_copy(self):
+        (self.project / "Build/prefix/zlib/include/zlib.h").write_text("drift\n")
+        with self.assertRaisesRegex(ValueError, "header.*digest"):
+            self.stage()
+
+    def test_build_only_boost_header_manifest_digest_is_bound(self):
+        from dataclasses import replace
+        report = self.result["reports"]["boost"]
+        self.result["reports"]["boost"] = replace(report, manifest_sha256="0" * 64)
+        with self.assertRaisesRegex(ValueError, "prefix.*manifest.*digest"):
+            self.stage()
+
+    def test_non_utf8_header_body_preserves_original_notice(self):
+        core = self.project / "Build/airdcpp-core/reproducible-release"
+        header = core / "source/airdcpp/core/Version.h"
+        header.write_bytes(header.read_bytes() + b"/* original non-UTF8 quote: \x91 */\n")
+        rows = json.loads((core / "staged-source-manifest.json").read_bytes())
+        for row in rows:
+            if row["path"] == "airdcpp/core/Version.h":
+                row["sha256"] = self.aggregate.sha(header.read_bytes())
+        raw = self.aggregate.canonical(rows)
+        (core / "staged-source-manifest.json").write_bytes(raw)
+        digest = self.aggregate.sha(raw)
+        self.result["core"]["staged_manifest_sha256"] = digest
+        self.result["provenance"]["components"][0]["source_manifest_sha256"] = digest
+        self.stage()
+        self.assertEqual((self.candidate / "include/airdcpp/core/Version.h").read_bytes(), header.read_bytes())
+        notices = json.loads((self.candidate / "licenses/core/header-notices.json").read_bytes())
+        self.assertEqual(notices[0]["notice"], "/* Copyright fixture. GNU General Public License version 3 or later. */")
+
+    def test_missing_original_notice_blocks_candidate(self):
+        (self.project / "Build/prefix/boost/LICENSE_1_0.txt").unlink()
+        with self.assertRaises((OSError, ValueError)):
+            self.stage()
+
+    def test_maxmind_notice_must_match_locked_source_tree(self):
+        (self.source / "NOTICE").write_text("drift\n")
+        with self.assertRaisesRegex(ValueError, "source.*manifest"):
+            self.stage()
+
+    def test_missing_header_or_notice_is_rejected_even_with_rewritten_checksums(self):
+        self.stage()
+        for relative in ("include/airdcpp/core/Version.h", "licenses/boost/LICENSE_1_0.txt"):
+            path = self.candidate / relative
+            content = path.read_bytes()
+            path.unlink()
+            self.resign(self.candidate)
+            with self.subTest(relative=relative), self.assertRaises(ValueError):
+                self.package.verify_package(self.candidate, self.project)
+            path.write_bytes(content)
+        self.resign(self.candidate)
+        self.package.verify_package(self.candidate, self.project)
+
+    def test_corruption_and_undeclared_files_are_rejected(self):
+        self.stage()
+        header = self.candidate / "include/zlib.h"
+        content = header.read_bytes()
+        header.write_bytes(content + b"drift")
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            self.package.verify_package(self.candidate, self.project)
+        header.write_bytes(content)
+        (self.candidate / "extra.txt").write_text("unexpected\n")
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            self.package.verify_package(self.candidate, self.project)
+
+    def test_changed_pin_and_link_boundary_fail_even_with_rewritten_checksums(self):
+        self.stage()
+        manifest = self.candidate / "metadata/manifest.json"
+        saved = manifest.read_bytes()
+        data = json.loads(saved)
+        data["dependencies"][0]["version"] = "unapproved"
+        manifest.write_bytes(self.aggregate.canonical(data))
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "lock|pin"):
+            self.package.verify_package(self.candidate, self.project)
+        manifest.write_bytes(saved)
+        interface = self.candidate / "metadata/link-interface.json"
+        data = json.loads(interface.read_bytes())
+        data["frameworks"] = ["Foundation"]
+        interface.write_bytes(self.aggregate.canonical(data))
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "link.*boundary"):
+            self.package.verify_package(self.candidate, self.project)
+
+    def test_actual_archive_is_inspected_despite_self_consistent_metadata(self):
+        self.stage()
+        archive = self.candidate / "lib/libairdcpp.a"
+        data = bytearray(archive.read_bytes())
+        # Corrupt the Mach-O CPU field of one member, then update declared hashes.
+        magic = data.index(b"\xcf\xfa\xed\xfe")
+        data[magic + 4:magic + 8] = b"\x07\x00\x00\x01"
+        archive.write_bytes(data)
+        manifest = self.candidate / "metadata/manifest.json"
+        metadata = json.loads(manifest.read_bytes())
+        metadata["aggregate_sha256"] = self.aggregate.sha(data)
+        manifest.write_bytes(self.aggregate.canonical(metadata))
+        from inspect_core_archive import archive_members
+        changed_name, changed_payload = next(archive_members(archive))
+        mapping_path = self.candidate / "metadata/member-map.json"
+        mapping = json.loads(mapping_path.read_bytes())
+        for row in mapping:
+            if row["canonical_name"] == changed_name:
+                row["sha256"] = self.aggregate.sha(changed_payload)
+        mapping_path.write_bytes(self.aggregate.canonical(mapping))
+        provenance_path = self.candidate / "metadata/aggregate-provenance.json"
+        provenance = json.loads(provenance_path.read_bytes())
+        provenance["container"]["archive_sha256"] = self.aggregate.sha(data)
+        provenance_path.write_bytes(self.aggregate.canonical(provenance))
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "arm64"):
+            self.package.verify_package(self.candidate, self.project)
+
+    def test_metadata_cannot_publish_private_paths(self):
+        self.stage()
+        manifest = self.candidate / "metadata/manifest.json"
+        data = json.loads(manifest.read_bytes())
+        data["private_path"] = "/Users/builder/Build/core"
+        manifest.write_bytes(self.aggregate.canonical(data))
+        self.resign(self.candidate)
+        with self.assertRaisesRegex(ValueError, "path|schema"):
+            self.package.verify_package(self.candidate, self.project)
+
+    def test_successful_publish_and_failed_candidate_preserve_accepted_distribution(self):
+        self.stage()
+        target = self.project / "Dist"
+        self.package.publish_candidate(self.candidate, target, self.project)
+        before = {str(p.relative_to(target)): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+        bad = self.project / ".package-bad"
+        shutil.copytree(target, bad)
+        (bad / "include/zlib.h").unlink()
+        with self.assertRaises(ValueError):
+            self.package.publish_candidate(bad, target, self.project)
+        after = {str(p.relative_to(target)): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+        self.assertEqual(after, before)
+
+    def test_unsafe_output_and_symlink_target_are_rejected(self):
+        self.stage()
+        sentinel = self.project / "sentinel"
+        sentinel.mkdir()
+        (sentinel / "safe.txt").write_text("untouched\n")
+        with self.assertRaisesRegex(ValueError, "target"):
+            self.package.publish_candidate(self.candidate, sentinel, self.project)
+        (self.project / "Dist").symlink_to(sentinel)
+        with self.assertRaises((OSError, ValueError, RuntimeError)):
+            self.package.publish_candidate(self.candidate, self.project / "Dist", self.project)
+        self.assertEqual((sentinel / "safe.txt").read_text(), "untouched\n")
+
+    def test_post_publication_validation_exception_rolls_back(self):
+        from unittest.mock import patch
+        self.stage()
+        target = self.project / "Dist"
+        self.package.publish_candidate(self.candidate, target, self.project)
+        old = (target / "metadata/aggregate-provenance.json").read_bytes()
+        candidate = self.project / ".package-next"
+        shutil.copytree(target, candidate)
+        provenance_path = candidate / "metadata/aggregate-provenance.json"
+        changed = json.loads(provenance_path.read_bytes())
+        changed["tool"]["version"] = "fixture second tool receipt"
+        provenance_path.write_bytes(self.aggregate.canonical(changed))
+        self.resign(candidate)
+        original = self.package.verify_package
+        def validation_failure(path, authority):
+            if path == target:
+                raise TypeError("simulated validation failure after atomic swap")
+            return original(path, authority)
+        # This fault is injected at the real transaction's finalization boundary;
+        # assertions inspect actual target bytes after real macOS rename/swap.
+        with patch("distribution_package.verify_package", side_effect=validation_failure):
+            with self.assertRaises((TypeError, RuntimeError)):
+                self.package.publish_candidate(candidate, target, self.project)
+        self.assertEqual((target / "metadata/aggregate-provenance.json").read_bytes(), old)
+
+    def test_rerun_publishes_identical_file_content(self):
+        self.stage()
+        before = {str(p.relative_to(self.candidate)): p.read_bytes() for p in self.candidate.rglob("*") if p.is_file()}
+        second = self.project / ".package-second"
+        second.mkdir()
+        self.package.stage_candidate(self.project, second, self.result)
+        self.assertEqual({str(p.relative_to(second)): p.read_bytes() for p in second.rglob("*") if p.is_file()}, before)
+        self.package.publish_candidate(self.candidate, self.project / "Dist", self.project)
+        self.package.publish_candidate(second, self.project / "Dist", self.project)
+        self.assertEqual({str(p.relative_to(self.project / "Dist")): p.read_bytes() for p in (self.project / "Dist").rglob("*") if p.is_file()}, before)
+
+
+if __name__ == "__main__":
+    unittest.main()
