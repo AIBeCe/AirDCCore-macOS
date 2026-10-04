@@ -18,7 +18,7 @@ import sys
 
 GENERATED = ('airdcpp/core/version.inc', 'airdcpp/core/localization/StringDefs.cpp')
 PATCH_PATH = 'config/patches/airdcpp-core-55d51ceb-private-build.patch'
-PATCH_TARGETS = ('airdcpp/hash/HashStore.cpp', 'CMakeLists.txt')
+PATCH_TARGETS = ('airdcpp/hash/HashStore.cpp', 'CMakeLists.txt', 'airdcpp/util/NetworkUtil.cpp')
 CORE_INPUT_FILES = ('config/core-reproducible-policy.json', PATCH_PATH,
                     'scripts/lib/core_stage.py', 'scripts/lib/reproducible_core.sh',
                     'CMakeLists.txt', 'cmake/modules/AirDCCorePolicy.cmake',
@@ -214,7 +214,7 @@ def policy_and_manifest(project, checkout):
         raise ValueError('Core patch sha256 mismatch')
     headers = re.findall(rb'(?m)^--- a/(.+)\n\+\+\+ b/(.+)\n@@ [^\n]+\n',patch_bytes)
     if headers != [(name.encode(),name.encode()) for name in PATCH_TARGETS] or \
-            patch_bytes.count(b'\n@@ ') != 3 or patch_bytes.count(b'--- ') != 2 or patch_bytes.count(b'+++ ') != 2:
+            patch_bytes.count(b'\n@@ ') != 4 or patch_bytes.count(b'--- ') != 3 or patch_bytes.count(b'+++ ') != 3:
         raise ValueError('unexpected sole Core patch structure')
     git_env = {**os.environ, 'GIT_OPTIONAL_LOCKS':'0', 'GIT_NO_REPLACE_OBJECTS':'1'}
     def git(*args):

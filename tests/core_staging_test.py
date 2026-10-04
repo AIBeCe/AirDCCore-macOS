@@ -31,7 +31,7 @@ class CoreStagingTests(unittest.TestCase):
         self.tools = resolve_tool_inventory()
         self.env = {**os.environ, 'PYTHONDONTWRITEBYTECODE':'1', 'GIT_OPTIONAL_LOCKS':'0',
                     'GIT_AUTHOR_DATE':'1774518197 +0000', 'GIT_COMMITTER_DATE':'1774518197 +0000'}
-        for relative in ('CMakeLists.txt', 'airdcpp/hash/HashStore.cpp', 'scripts/generate_version.py',
+        for relative in ('CMakeLists.txt', 'airdcpp/hash/HashStore.cpp', 'airdcpp/util/NetworkUtil.cpp', 'scripts/generate_version.py',
                          'scripts/generate_stringdefs.py', 'airdcpp/core/localization/StringDefs.h'):
             target = self.checkout/relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -289,6 +289,57 @@ airdcpp_define_core_version_command()
                                '-G','Ninja'),text=True,capture_output=True)
         self.assertNotEqual(denied.returncode,0)
         self.assertIn('Private Core version command authority is required',denied.stdout+denied.stderr)
+
+    def test_actual_patched_network_buffer_native_ipv4_ipv6_and_manifest(self):
+        before=self.source_state()
+        prepared=self.prepare(); stage=Path(prepared['staged_root'])
+        relative='airdcpp/util/NetworkUtil.cpp'
+        def fragment(text):
+            start=text.index('char address[')
+            end=text.index('inet_ntop(sa->sa_family, src, address, len);',start)+len('inet_ntop(sa->sa_family, src, address, len);')
+            return text[start:end]
+        patched=fragment((stage/relative).read_text())
+        original=fragment((self.checkout/relative).read_text())
+        cpp=self.project/'network-buffer.cpp'
+        prefix='''#include <arpa/inet.h>
+#include <cassert>
+#include <string>
+int main() {
+auto format=[](bool v6) {
+ in_addr four; in6_addr six;
+ assert(inet_pton(AF_INET,"192.0.2.1",&four)==1);
+ assert(inet_pton(AF_INET6,"2001:db8::1",&six)==1);
+ sockaddr socket_address{}; auto* sa=&socket_address;
+ sa->sa_family=v6?AF_INET6:AF_INET;
+ void* src=v6?static_cast<void*>(&six):static_cast<void*>(&four);
+ socklen_t len=v6?INET6_ADDRSTRLEN:INET_ADDRSTRLEN;
+'''
+        suffix='''
+ assert(sizeof(address)==INET6_ADDRSTRLEN);
+ return std::string(address);
+};
+assert(format(false)=="192.0.2.1");
+assert(format(true)=="2001:db8::1");
+}
+'''
+        binary=self.project/'network-buffer'
+        cxx=_pinned_tools(self.tools.apple,self.tools.identities,'apple')['cxx']
+        flags=(cxx,'-isysroot',self.tools.sdkroot,'-std=c++20','-Werror','-Wthread-safety','-Wvla-cxx-extension')
+        cpp.write_text(prefix+original+suffix)
+        baseline=subprocess.run((*flags,str(cpp),'-o',str(binary)),text=True,capture_output=True)
+        self.assertNotEqual(baseline.returncode,0)
+        self.assertIn('vla-cxx-extension',baseline.stderr)
+        cpp.write_text(prefix+patched+suffix)
+        compiled=subprocess.run((*flags,str(cpp),'-o',str(binary)),text=True,capture_output=True)
+        self.assertEqual(compiled.returncode,0,compiled.stdout+compiled.stderr)
+        subprocess.run((str(binary),),check=True)
+        self.generate(prepared)
+        self.core.finalize_core_source(self.project,self.checkout,self.output,self.tools,sys.executable)
+        self.core.validate_core_source(self.project,self.checkout,self.output,self.tools,sys.executable)
+        self.assertEqual(before,self.source_state())
+        (stage/relative).write_text((stage/relative).read_text()+'// changed\n')
+        with self.assertRaisesRegex(ValueError,'staged content'):
+            self.core.validate_core_source(self.project,self.checkout,self.output,self.tools,sys.executable)
 
     def test_actual_patched_callback_native_valid_short_and_long_keys(self):
         stage=Path(self.prepare()['staged_root'])

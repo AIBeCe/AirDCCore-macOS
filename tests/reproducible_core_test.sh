@@ -64,7 +64,7 @@ class ControlledCoreTests(unittest.TestCase):
         checkout.mkdir(parents=True)
         subprocess.run(('git', 'init', '-q', str(checkout)), check=True)
         write(checkout / 'state.txt', 'pinned\n')
-        for relative in ('CMakeLists.txt','airdcpp/hash/HashStore.cpp','scripts/generate_version.py',
+        for relative in ('CMakeLists.txt','airdcpp/hash/HashStore.cpp','airdcpp/util/NetworkUtil.cpp','scripts/generate_version.py',
                          'scripts/generate_stringdefs.py','airdcpp/core/localization/StringDefs.h'):
             target=checkout/relative
             target.parent.mkdir(parents=True,exist_ok=True)

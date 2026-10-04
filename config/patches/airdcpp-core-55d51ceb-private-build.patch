@@ -17,3 +17,8 @@
 -    COMMAND ${PYTHON_EXECUTABLE} scripts/generate_version.py ./airdcpp/core/version.inc ${VERSION} ${TAG_APPLICATION} ${APPLICATION_ID}
 +    COMMAND ${AIRDCCORE_VERSION_COMMAND}
      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+--- a/airdcpp/util/NetworkUtil.cpp
++++ b/airdcpp/util/NetworkUtil.cpp
+@@ -185,1 +185,1 @@
+-					char address[len];
++					char address[INET6_ADDRSTRLEN];

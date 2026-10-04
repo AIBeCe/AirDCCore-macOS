@@ -49,7 +49,7 @@ class ConsumerTests(unittest.TestCase):
         write(checkout/'airdcpp/core/version.h',
               '#include <string>\n#include "version.inc"\n'
               'namespace dcpp { std::string getVersionTag() noexcept; std::string getGitCommit() noexcept; }\n')
-        for relative in ('CMakeLists.txt','airdcpp/hash/HashStore.cpp','scripts/generate_version.py',
+        for relative in ('CMakeLists.txt','airdcpp/hash/HashStore.cpp','airdcpp/util/NetworkUtil.cpp','scripts/generate_version.py',
                          'scripts/generate_stringdefs.py','airdcpp/core/localization/StringDefs.h'):
             (checkout/relative).parent.mkdir(parents=True,exist_ok=True)
             shutil.copy2(ROOT/'Source/airdcpp-core'/relative,checkout/relative)
