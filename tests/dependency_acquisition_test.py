@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -407,6 +408,175 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual((published / "LICENSE").read_bytes(), b"license\n")
         self.assertEqual((published / "code.c").read_bytes(), b"source\n")
 
+    def test_archive_content_mutation_during_clone_is_not_accepted(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._publish_fd
+        def mutate_then_clone(src, dst, name):
+            fd = os.open('code.c', os.O_WRONLY | os.O_TRUNC, dir_fd=src)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(b'unverified mutated bytes\n')
+            return original(src, dst, name)
+        with patch.object(self.a, '_publish_fd', side_effect=mutate_then_clone):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record)
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+
+    def test_cache_content_mutation_during_clone_is_not_accepted(self):
+        archive, record = self.archive()
+        original = self.a._publish_fd
+        def mutate_then_clone(src, dst, name):
+            os.pwrite(src, b'unverified bytes', 0)
+            return original(src, dst, name)
+        with patch.object(self.a, 'open_https', return_value=io.BytesIO(archive.read_bytes())), \
+                patch.object(self.a, '_publish_fd', side_effect=mutate_then_clone):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record, False)
+        downloads = self.project / 'Dependencies/.downloads'
+        self.assertFalse((downloads / self.a.cache_name(record)).exists())
+        self.assertFalse(any(downloads.glob('.publication-*')))
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+
+    def test_content_mutation_after_clone_is_not_accepted(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._publish_fd
+        def clone_then_mutate(src, dst, name):
+            cloned = original(src, dst, name)
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dst)
+            try:
+                fd = os.open('code.c', os.O_WRONLY | os.O_TRUNC, dir_fd=child)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(b'unverified cloned bytes\n')
+            finally:
+                os.close(child)
+            return cloned
+        with patch.object(self.a, '_publish_fd', side_effect=clone_then_mutate):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record)
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+
+    def test_publication_preserves_concurrent_public_winner(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._rename_exclusive
+        target = self.project / 'Dependencies/fixture'
+        winner_identity = None
+        def publish_winner(parent, private, name):
+            nonlocal winner_identity
+            target.mkdir()
+            (target / 'winner').write_bytes(b'keep concurrent winner')
+            winner_identity = target.stat().st_ino
+            return original(parent, private, name)
+        with patch.object(self.a, '_rename_exclusive', side_effect=publish_winner):
+            with self.assertRaises(self.a.AcquireError):
+                self.acquire(record)
+        self.assertEqual(target.stat().st_ino, winner_identity)
+        self.assertEqual((target / 'winner').read_bytes(), b'keep concurrent winner')
+        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+
+    def test_private_clone_substitution_preserves_nonowned_replacement(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._publish_fd
+        replacement = None
+        def substitute_private(src, dst, name):
+            nonlocal replacement
+            cloned = original(src, dst, name)
+            replacement = self.project / 'Dependencies' / name
+            replacement.rename(replacement.with_name(name + '-verified'))
+            replacement.mkdir()
+            (replacement / 'winner').write_bytes(b'keep private replacement')
+            return cloned
+        with patch.object(self.a, '_publish_fd', side_effect=substitute_private):
+            with self.assertRaisesRegex(self.a.AcquireError, 'path identity changed'):
+                self.acquire(record)
+        self.assertEqual((replacement / 'winner').read_bytes(), b'keep private replacement')
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+
+    def test_final_publication_substitution_preserves_nonowned_replacement(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._rename_exclusive
+        target = self.project / 'Dependencies/fixture'
+        def substitute_public(parent, private, name):
+            original(parent, private, name)
+            target.rename(target.with_name('fixture-verified'))
+            target.mkdir()
+            (target / 'winner').write_bytes(b'keep public replacement')
+        with patch.object(self.a, '_rename_exclusive', side_effect=substitute_public):
+            with self.assertRaisesRegex(self.a.AcquireError, 'path identity changed'):
+                self.acquire(record)
+        self.assertEqual((target / 'winner').read_bytes(), b'keep public replacement')
+
+    def test_content_mutation_during_final_rename_removes_only_owned_invalid_target(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._rename_exclusive
+        def mutate_then_rename(parent, private, name):
+            child = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            try:
+                fd = os.open('code.c', os.O_WRONLY | os.O_TRUNC, dir_fd=child)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(b'changed before final rename')
+            finally:
+                os.close(child)
+            return original(parent, private, name)
+        with patch.object(self.a, '_rename_exclusive', side_effect=mutate_then_rename):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record)
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+
+    def test_cleanup_failure_preserves_primary_content_error(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a._publish_fd
+        def mutate_then_clone(src, dst, name):
+            fd = os.open('code.c', os.O_WRONLY | os.O_TRUNC, dir_fd=src)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(b'unverified mutated bytes')
+            return original(src, dst, name)
+        with patch.object(self.a, '_publish_fd', side_effect=mutate_then_clone), \
+                patch.object(self.a, '_remove_at', side_effect=OSError('cleanup failed')):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed') as failure:
+                self.acquire(record)
+        self.assertTrue(any('cleanup failed' in note for note in failure.exception.__notes__))
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+
+    def test_content_mutation_during_fsync_refuses_acceptance(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        original = self.a.os.fsync
+        def mutate_then_sync(parent):
+            child = os.open('fixture', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            try:
+                fd = os.open('code.c', os.O_WRONLY | os.O_TRUNC, dir_fd=child)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(b'changed during fsync')
+            finally:
+                os.close(child)
+            return original(parent)
+        with patch.object(self.a.os, 'fsync', side_effect=mutate_then_sync):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record)
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+
+    def test_missing_native_exclusive_rename_fails_closed(self):
+        archive, record = self.archive()
+        self.cache(archive, record)
+        native = self.a.ctypes.CDLL(None, use_errno=True)
+        class CloneOnlyLibrary:
+            def __init__(self):
+                self.fclonefileat = native.fclonefileat
+        with patch.object(self.a.ctypes, 'CDLL', return_value=CloneOnlyLibrary()):
+            with self.assertRaisesRegex(self.a.AcquireError, 'requires macOS renameatx_np'):
+                self.acquire(record)
+        self.assertFalse((self.project / 'Dependencies/fixture').exists())
+        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+
     def test_publication_uses_verified_inode_after_temporary_entry_substitution(self):
         archive, record = self.archive()
         original = self.a._publish_fd
@@ -531,6 +701,62 @@ class AcquisitionTests(unittest.TestCase):
                     self.acquire(record)
                 shutil.rmtree(source)
                 self.acquire(record)
+
+    def test_git_content_mutation_during_clone_is_not_accepted(self):
+        record, fetch = self.git_record()
+        original = self.a._publish_fd
+        def mutate_then_clone(src, dst, name):
+            if stat.S_ISDIR(os.fstat(src).st_mode):
+                fd = os.open('LICENSE', os.O_WRONLY | os.O_TRUNC, dir_fd=src)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(b'unverified Git bytes\n')
+            return original(src, dst, name)
+        with patch.object(self.a, '_fetch_git', side_effect=fetch), \
+                patch.object(self.a, '_publish_fd', side_effect=mutate_then_clone):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record, False)
+        self.assertFalse((self.project / 'Dependencies/snappy').exists())
+        self.assertFalse(any((self.project / 'Dependencies').glob('.publication-*')))
+
+    def test_git_metadata_mutation_during_clone_is_not_accepted(self):
+        record, fetch = self.git_record()
+        original = self.a._publish_fd
+        def mutate_then_clone(src, dst, name):
+            if stat.S_ISDIR(os.fstat(src).st_mode):
+                git_fd = os.open('.git', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=src)
+                try:
+                    fd = os.open('config', os.O_WRONLY | os.O_APPEND, dir_fd=git_fd)
+                    with os.fdopen(fd, 'wb') as stream:
+                        stream.write(b'\n[core]\n\tfsmonitor = malicious-command\n')
+                finally:
+                    os.close(git_fd)
+            return original(src, dst, name)
+        with patch.object(self.a, '_fetch_git', side_effect=fetch), \
+                patch.object(self.a, '_publish_fd', side_effect=mutate_then_clone):
+            with self.assertRaisesRegex(self.a.AcquireError, 'publication content changed'):
+                self.acquire(record, False)
+        self.assertFalse((self.project / 'Dependencies/snappy').exists())
+
+    def test_git_tracked_entries_are_locked_before_full_publication_digest(self):
+        record, fetch = self.git_record()
+        with patch.object(self.a, '_fetch_git', side_effect=fetch):
+            self.acquire(record, False)
+        shutil.rmtree(self.project / 'Dependencies/snappy')
+        original = self.a._tree_manifest_fd
+        mutated = False
+        def mutate_before_manifest(fd):
+            nonlocal mutated
+            if not mutated and '.git' in os.listdir(fd):
+                mutated = True
+                child = os.open('LICENSE', os.O_WRONLY | os.O_TRUNC, dir_fd=fd)
+                with os.fdopen(child, 'wb') as stream:
+                    stream.write(b'drift before snapshot authority')
+            return original(fd)
+        with patch.object(self.a, '_tree_manifest_fd', side_effect=mutate_before_manifest):
+            with self.assertRaisesRegex(self.a.AcquireError, 'Git source drift before publication'):
+                self.acquire(record)
+        self.assertTrue(mutated)
+        self.assertFalse((self.project / 'Dependencies/snappy').exists())
 
     def test_git_wrong_commit_tree_and_origin(self):
         record, fetch = self.git_record()

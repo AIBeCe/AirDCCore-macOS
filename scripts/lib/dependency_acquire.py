@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import secrets
 import shutil
 import stat
 import subprocess
@@ -47,6 +48,120 @@ def _publish_fd(source_fd: int, destination_fd: int, name: str):
     if clone(source_fd, destination_fd, os.fsencode(name), 1):  # CLONE_NOFOLLOW
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
+    return os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=destination_fd)
+
+
+def _rename_exclusive(parent_fd: int, source: str, target: str):
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        rename = library.renameatx_np
+    except AttributeError as error:
+        raise AcquireError("atomic descriptor publication requires macOS renameatx_np") from error
+    rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    rename.restype = ctypes.c_int
+    if rename(parent_fd, os.fsencode(source), parent_fd, os.fsencode(target), 0x00000004):
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _fd_identity(fd: int):
+    info = os.fstat(fd)
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def _identity_at(parent_fd: int, name: str):
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
+
+
+def _remove_at(parent_fd: int, name: str, expected_identity=None):
+    mode = os.stat(name, dir_fd=parent_fd, follow_symlinks=False).st_mode
+    if stat.S_ISDIR(mode):
+        child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            if expected_identity is not None and _fd_identity(child) != expected_identity:
+                raise AcquireError("owned publication changed during cleanup")
+            for entry in os.listdir(child):
+                _remove_at(child, entry)
+            if _identity_at(parent_fd, name) != _fd_identity(child):
+                raise AcquireError("owned publication changed during cleanup")
+        finally:
+            os.close(child)
+        os.rmdir(name, dir_fd=parent_fd)
+    else:
+        if expected_identity is not None and _identity_at(parent_fd, name) != expected_identity:
+            raise AcquireError("owned publication changed during cleanup")
+        os.unlink(name, dir_fd=parent_fd)
+
+
+def _content_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _sha_fd(fd: int) -> str:
+    before = _content_stamp(os.fstat(fd))
+    checksum = hashlib.sha256()
+    offset = 0
+    while chunk := os.pread(fd, 1024 * 1024, offset):
+        checksum.update(chunk)
+        offset += len(chunk)
+    if _content_stamp(os.fstat(fd)) != before:
+        raise AcquireError("publication content changed while hashing")
+    return checksum.hexdigest()
+
+
+def _tree_manifest_fd(root_fd: int) -> bytes:
+    entries = []
+    def visit(directory_fd, parts):
+        before = _content_stamp(os.fstat(directory_fd))
+        for name in os.listdir(directory_fd):
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            relative = "/".join((*parts, name))
+            if stat.S_ISLNK(info.st_mode):
+                entry = dict(path=relative, type="symlink", target=os.readlink(name, dir_fd=directory_fd))
+            elif stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode):
+                flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                if stat.S_ISDIR(info.st_mode):
+                    flags |= os.O_DIRECTORY
+                child = os.open(name, flags, dir_fd=directory_fd)
+                try:
+                    if _content_stamp(os.fstat(child)) != _content_stamp(info):
+                        raise AcquireError("publication content changed while hashing")
+                    if stat.S_ISDIR(info.st_mode):
+                        entry = dict(path=relative, type="directory")
+                        visit(child, (*parts, name))
+                    else:
+                        entry = dict(path=relative, type="file", executable=bool(info.st_mode & 0o111),
+                                     sha256=_sha_fd(child))
+                finally:
+                    os.close(child)
+            else:
+                raise AcquireError(f"unsupported source file: {relative}")
+            if _content_stamp(os.stat(name, dir_fd=directory_fd, follow_symlinks=False)) != _content_stamp(info):
+                raise AcquireError("publication content changed while hashing")
+            entries.append(entry)
+        if _content_stamp(os.fstat(directory_fd)) != before:
+            raise AcquireError("publication content changed while hashing")
+    visit(root_fd, ())
+    return _manifest(entries)
+
+
+def _content_sha256(fd: int) -> str:
+    kind = _fd_identity(fd)[2]
+    if kind == stat.S_IFREG:
+        return _sha_fd(fd)
+    if kind == stat.S_IFDIR:
+        return hashlib.sha256(_tree_manifest_fd(fd)).hexdigest()
+    raise AcquireError("unsupported publication object")
+
+
+def _check_content(fd: int, expected_sha256: str):
+    if _content_sha256(fd) != expected_sha256:
+        raise AcquireError("publication content changed")
 
 
 def _sha(path: Path) -> str:
@@ -105,7 +220,7 @@ class OwnedDirectory:
         finally:
             os.close(fd)
 
-    def publish(self, temporary: Path, target: str, source_fd: int):
+    def publish(self, temporary: Path, target: str, source_fd: int, expected_sha256: str):
         self.check()
         info = os.fstat(source_fd)
         temporary_identity = info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode)
@@ -114,15 +229,47 @@ class OwnedDirectory:
             raise AcquireError("path identity changed before publication")
         if _identity(self.path / target) is not None:
             raise AcquireError("path identity changed before publication")
+        _check_content(source_fd, expected_sha256)
+        private = ".publication-" + secrets.token_hex(16)
+        clone_fd = None
+        clone_identity = None
+        published = False
         try:
-            _publish_fd(source_fd, self.fd, target)
-        except OSError as error:
+            # Pin the clone before exposing its final name. A replacement of the
+            # private entry cannot make cleanup mistake another inode for ours.
+            clone_fd = _publish_fd(source_fd, self.fd, private)
+            clone_identity = _fd_identity(clone_fd)
+            _check_content(clone_fd, expected_sha256)
+            self.check()
+            if _identity_at(self.fd, private) != clone_identity:
+                raise AcquireError("path identity changed before publication")
+            _rename_exclusive(self.fd, private, target)
+            published = True
+            if _identity_at(self.fd, target) != clone_identity:
+                raise AcquireError("path identity changed before publication")
+            _check_content(clone_fd, expected_sha256)
+            self.check()
+            os.fsync(self.fd)
+            self.check()
+            if _identity_at(self.fd, target) != clone_identity:
+                raise AcquireError("path identity changed before publication")
+            _check_content(clone_fd, expected_sha256)
+            self.check()
+            if _identity_at(self.fd, target) != clone_identity:
+                raise AcquireError("path identity changed before publication")
+        except (AcquireError, OSError) as error:
+            for name in ((target, private) if published else (private,)):
+                try:
+                    if clone_identity is not None and _identity_at(self.fd, name) == clone_identity:
+                        _remove_at(self.fd, name, clone_identity)
+                except (AcquireError, OSError) as cleanup_error:
+                    error.add_note(f"owned publication cleanup failed ({type(cleanup_error).__name__})")
+            if isinstance(error, AcquireError):
+                raise
             raise AcquireError("path identity changed before publication") from error
-        self.check()
-        published = _identity(self.path / target)
-        if published is None or published[2] != temporary_identity[2]:
-            raise AcquireError("path identity changed before publication")
-        os.fsync(self.fd)
+        finally:
+            if clone_fd is not None:
+                os.close(clone_fd)
 
 
 def _regular(path: Path):
@@ -377,7 +524,7 @@ def _download(cache: OwnedDirectory, record: DependencyRecord):
             os.fsync(output.fileno())
             if checksum.hexdigest() != record.source.archive_sha256:
                 raise AcquireError(f"{record.name}: download checksum mismatch")
-            cache.publish(temporary, cache_name(record), output.fileno())
+            cache.publish(temporary, cache_name(record), output.fileno(), record.source.archive_sha256)
     finally:
         # Unlink through the pinned descriptor, even if the directory was renamed.
         try:
@@ -528,6 +675,22 @@ def _verify_git_cache(cache_path: Path, record: DependencyRecord):
         _git(root, "fsck", "--full", "--no-reflogs")
 
 
+def _source_publication_sha256(owner: OwnedDirectory, record: DependencyRecord) -> str:
+    owner.check()
+    if record.source.kind == "archive":
+        return record.source.tree_manifest_sha256
+    _verify_git(owner.path, record)
+    expected, _ = _git_expected(owner.path, record)
+    full_manifest = _tree_manifest_fd(owner.fd)
+    entries = (json.loads(line) for line in full_manifest.splitlines())
+    materialized = _manifest(entry for entry in entries
+                             if entry["path"] != ".git" and not entry["path"].startswith(".git/"))
+    if materialized != expected:
+        raise AcquireError(f"{record.name}: Git source drift before publication")
+    owner.check()
+    return hashlib.sha256(full_manifest).hexdigest()
+
+
 def acquire_all(project_root: Path, lock: DependencyLock, offline: bool) -> None:
     project_root = Path(os.path.abspath(project_root))
     records = topological_records(lock)
@@ -595,24 +758,32 @@ def acquire_all(project_root: Path, lock: DependencyLock, offline: bool) -> None
                             temporary = Path(name)
                             try:
                                 with os.fdopen(fd, "w+b") as stream:
-                                    stream.write(_git(staging, "bundle", "create", "-", "HEAD"))
+                                    bundle = _git(staging, "bundle", "create", "-", "HEAD")
+                                    stream.write(bundle)
                                     stream.flush()
                                     os.fsync(stream.fileno())
-                                    cache.publish(temporary, cached.name, stream.fileno())
+                                    cache.publish(temporary, cached.name, stream.fileno(),
+                                                  hashlib.sha256(bundle).hexdigest())
                             finally:
                                 try:
                                     os.unlink(temporary.name, dir_fd=cache.fd)
                                 except FileNotFoundError:
                                     pass
                     stage_owner.check()
-                    owned.publish(staging, record.name, stage_owner.fd)
+                    expected_sha256 = _source_publication_sha256(stage_owner, record)
+                    owned.publish(staging, record.name, stage_owner.fd, expected_sha256)
                 finally:
                     # Never recurse through a changed project path on failure.
+                    primary_error = sys.exc_info()[1]
                     try:
                         owned.check()
                         if _identity(staging) is not None:
                             stage_owner.check()
                             shutil.rmtree(staging)
+                    except (AcquireError, OSError) as cleanup_error:
+                        if primary_error is None:
+                            raise
+                        primary_error.add_note(f"staging cleanup failed ({type(cleanup_error).__name__})")
                     finally:
                         stage_owner.__exit__(None, None, None)
     except AcquireError:
