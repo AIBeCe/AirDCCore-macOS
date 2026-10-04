@@ -35,6 +35,72 @@ BUILD_ENVIRONMENT_KEYS = (
     "SOURCE_DATE_EPOCH", "TMPDIR", "ZERO_AR_DATE",
 )
 
+# These eight adapters execute reviewed fixed commands, not arbitrary lock
+# arrays. A policy change must update the adapter and this guard together.
+_CMAKE_PLATFORM_OPTIONS = (
+    "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0",
+    "-DCMAKE_INSTALL_PREFIX=@STAGE@",
+)
+_OPENSSL_DEFAULTS = (
+    "OPENSSLDIR=/usr/local/ssl", "ENGINESDIR=/usr/local/lib/engines-3",
+    "MODULESDIR=/usr/local/lib/ossl-modules",
+)
+SUPPORTED_ADAPTER_OPTIONS = {
+    "bzip2": ("bzip2", (), (
+        "CC=/usr/bin/clang", "AR=/usr/bin/ar", "RANLIB=/usr/bin/ranlib",
+        "CFLAGS=-O3 -DNDEBUG -D_FILE_OFFSET_BITS=64 -arch arm64 -mmacosx-version-min=14.0",
+    ), ()),
+    "zlib": ("cmake", (
+        "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DZLIB_BUILD_SHARED=OFF",
+        "-DZLIB_BUILD_STATIC=ON", "-DZLIB_BUILD_TESTING=ON",
+        "-DCMAKE_OSX_ARCHITECTURES=arm64", "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0",
+        "-DCMAKE_INSTALL_PREFIX=@STAGE@",
+    ), (), ()),
+    "openssl": ("openssl", (
+        "darwin64-arm64-cc", "no-shared", "no-pinshared", "--prefix=@STAGE@",
+        "--openssldir=@STAGE@/ssl", "-arch arm64", "-mmacosx-version-min=14.0",
+    ), ("-j@JOBS@",) + _OPENSSL_DEFAULTS, ("install_dev",) + _OPENSSL_DEFAULTS),
+    "miniupnpc": ("cmake", _CMAKE_PLATFORM_OPTIONS + (
+        "-DUPNPC_BUILD_STATIC=ON", "-DUPNPC_BUILD_SHARED=OFF",
+        "-DUPNPC_BUILD_TESTS=ON", "-DUPNPC_BUILD_SAMPLE=OFF",
+    ), (), ()),
+    "libmaxminddb": ("cmake", _CMAKE_PLATFORM_OPTIONS + (
+        "-DBUILD_SHARED_LIBS=OFF", "-DBUILD_TESTING=ON",
+        "-DMAXMINDDB_BUILD_BINARIES=OFF", "-DMAXMINDDB_INSTALL=ON",
+    ), (), ()),
+    "snappy": ("cmake", _CMAKE_PLATFORM_OPTIONS + (
+        "-DBUILD_SHARED_LIBS=OFF", "-DSNAPPY_BUILD_TESTS=OFF",
+        "-DSNAPPY_BUILD_BENCHMARKS=OFF", "-DSNAPPY_FUZZING_BUILD=OFF", "-DSNAPPY_INSTALL=ON",
+    ), (), ()),
+    "leveldb": ("cmake", _CMAKE_PLATFORM_OPTIONS + (
+        "-DBUILD_SHARED_LIBS=OFF", "-DLEVELDB_BUILD_TESTS=OFF",
+        "-DLEVELDB_BUILD_BENCHMARKS=OFF", "-DLEVELDB_INSTALL=ON",
+        "-DCMAKE_PREFIX_PATH=@PREFIX:snappy@", "-DCMAKE_PROJECT_INCLUDE=@BUILD@/locked-snappy.cmake",
+        "-DCMAKE_REQUIRED_FLAGS=-L@PREFIX:snappy@/lib", "-DCMAKE_REQUIRED_LIBRARIES=c++",
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF", "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
+        "-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON", "-DCMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH=OFF",
+        "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF", "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    ), (), ()),
+    "boost": ("boost", ("--prefix=@STAGE@", "--with-libraries=regex,thread"), (
+        "variant=release", "link=static", "runtime-link=shared", "threading=multi",
+        "address-model=64", "architecture=arm",
+        "cxxflags=-arch arm64 -mmacosx-version-min=14.0 -O3 -DNDEBUG",
+        "linkflags=-arch arm64 -mmacosx-version-min=14.0", "--layout=system", "-j@JOBS@",
+    ), ()),
+}
+
+
+def _validate_adapter_options(record: DependencyRecord):
+    supported = SUPPORTED_ADAPTER_OPTIONS.get(record.name)
+    if supported is None or record.adapter != supported[0]:
+        raise BuildError(f"{record.name}: unsupported bounded adapter")
+    for field, expected in zip(("configure_options", "build_options", "install_options"),
+                               supported[1:]):
+        if getattr(record, field) != expected:
+            raise BuildError(f"{record.name}: unsupported {field} for bounded adapter")
+
 
 @dataclass(frozen=True)
 class ToolInventory:
@@ -273,6 +339,7 @@ def adapter_argv(record: DependencyRecord, paths: BuildPaths,
 def run_adapter(record: DependencyRecord, paths: BuildPaths,
                 dependency_prefixes: Mapping[str, Path], env: Mapping[str, str],
                 *, jobs: int | None = None, log=None):
+    _validate_adapter_options(record)
     argv = adapter_argv(record, paths, dependency_prefixes, jobs or job_count())
     subprocess.run(argv, env=dict(env), stdout=log, stderr=subprocess.STDOUT, check=True)
 
@@ -1044,6 +1111,8 @@ def _allowed_roots(paths: BuildPaths):
 def build_all(project_root: Path, lock: DependencyLock, *, force_rebuild: bool = False) -> None:
     project_root = Path(os.path.abspath(project_root))
     records = topological_records(lock)
+    for record in records:
+        _validate_adapter_options(record)
     acquire_all(project_root, lock, True)
     tools = resolve_tool_inventory()
     prefix_root = project_root / "Build/prefix"

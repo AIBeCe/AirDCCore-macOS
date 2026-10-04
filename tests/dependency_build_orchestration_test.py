@@ -22,7 +22,7 @@ sys.path.insert(0, str(LIB))
 
 import dependency_build as build
 import dependency_prefix as prefix
-from dependency_lock import DependencyLock, DependencyRecord, Platform, Source
+from dependency_lock import DependencyLock, DependencyRecord, Platform, Source, load_lock
 
 
 def record(name="fixture", dependencies=()):
@@ -479,6 +479,50 @@ class ToolResolutionTests(unittest.TestCase):
                                 build._canonical_json(build.asdict(second)))
 
 
+class AdapterOptionsTests(unittest.TestCase):
+    def setUp(self):
+        self.lock = load_lock(ROOT / "config/dependencies.lock")
+        self.temporary = tempfile.TemporaryDirectory(prefix="airdc-options-test-")
+        self.addCleanup(self.temporary.cleanup)
+        self.project = Path(self.temporary.name).resolve()
+
+    def test_all_native_arrays_fail_closed_before_acquisition(self):
+        for item in self.lock.dependencies:
+            for field in ("configure_options", "build_options", "install_options"):
+                with self.subTest(name=item.name, field=field):
+                    changed = replace(item, **{field: getattr(item, field) + ("unsupported-option",)})
+                    lock = replace(self.lock, dependencies=tuple(
+                        changed if candidate.name == item.name else candidate
+                        for candidate in self.lock.dependencies))
+                    with patch.object(build, "acquire_all", side_effect=AssertionError("acquisition attempted")):
+                        with self.assertRaisesRegex(build.BuildError, f"{item.name}: unsupported {field}"):
+                            build.build_all(self.project, lock)
+                    self.assertEqual(list(self.project.iterdir()), [])
+
+    def test_all_current_native_arrays_are_supported(self):
+        for item in self.lock.dependencies:
+            with self.subTest(name=item.name):
+                build._validate_adapter_options(item)
+
+    def test_unknown_name_and_misstated_adapter_fail_closed(self):
+        item = self.lock.dependencies[0]
+        for changed in (replace(item, name="unknown"), replace(item, adapter="cmake")):
+            with self.subTest(name=changed.name, adapter=changed.adapter):
+                with patch.object(build, "acquire_all", side_effect=AssertionError("acquisition attempted")):
+                    with self.assertRaisesRegex(build.BuildError, "unsupported bounded adapter"):
+                        build.build_all(self.project, DependencyLock(1, (changed,)))
+                self.assertEqual(list(self.project.iterdir()), [])
+
+    def test_direct_adapter_invocation_rejects_changed_bzip2_cflags(self):
+        item = self.lock.dependencies[0]
+        changed = replace(item, build_options=tuple(value.replace("-O3", "-O0")
+                                                   for value in item.build_options))
+        paths = build.BuildPaths(*(self.project for _ in range(8)))
+        with patch.object(build.subprocess, "run", side_effect=AssertionError("adapter executed")):
+            with self.assertRaisesRegex(build.BuildError, "bzip2: unsupported build_options"):
+                build.run_adapter(changed, paths, {}, {}, jobs=1)
+
+
 class OrchestrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -493,6 +537,11 @@ class OrchestrationTests(unittest.TestCase):
         (self.project / "scripts/lib/dependencies").mkdir(parents=True)
         self.records = (record("a"), record("b", ("a",)))
         self.lock = DependencyLock(1, self.records)
+        supported = {item.name: (item.adapter, item.configure_options, item.build_options,
+                                 item.install_options) for item in self.records}
+        policy = patch.dict(build.SUPPORTED_ADAPTER_OPTIONS, supported)
+        policy.start()
+        self.addCleanup(policy.stop)
         for item in self.records:
             source = self.project / "Dependencies" / item.name
             (source / "payload/include").mkdir(parents=True)
