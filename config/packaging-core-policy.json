@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "upstream_commit": "55d51ceb817ec006d4ec844d9e3788e1b0ccc352",
   "archive_sha256": "085b179a33c9298c07554f5eac2159d531cc0208af718d2d4958f86507bfec93",
-  "core_input_fingerprint": "d306a8804b78b4acd98cab66b8b9e0e2b9c680c40b2e748a019ad55b403118c6",
+  "core_input_fingerprint": "c0e9b077a666661b6b22f17fc455c7ce8399e2e021655653498d0749a430c871",
   "compiler": {
     "name": "Apple Clang C++",
     "sha256": "7def90dd8829726686213a747fc5bff1583df933dae5edc55d755479e0bfe00a",
@@ -27,5 +27,5 @@
       "definitions": "-DBOOST_ATOMIC_NO_LIB -DBOOST_CHRONO_NO_LIB -DBOOST_CONTAINER_NO_LIB -DBOOST_DATE_TIME_NO_LIB -DBOOST_REGEX_NO_LIB -DBOOST_THREAD_NO_LIB -DNO_CLIENT_UPDATER -DHAVE_IFADDRS_H"
     }
   ],
-  "rationale": "Packaging-only capture of the accepted Core's common Ninja object flags and two material definition overrides, bound to its archive, source/input fingerprint and compiler/construction tools. Architecture, deployment, C++20, Release optimization and source mapping agree with accepted CMake cache/summary and tracked target policy. The successful build log is not verbose, so Ninja is observed metadata rather than independent immutable compile-command authority. SDK/source/build/prefix paths are normalized to stable tokens; no Phase 6 input is changed."
+  "rationale": "Packaging-only capture of the accepted Core's common Ninja object flags and two material definition overrides, bound to its archive, normalized public input fingerprint and compiler/construction tools. Schema 2 replaces only the validated version-authority staged_root with $CORE_SOURCE and rebinds its canonical digest inside the copied private input document; the pin is derived from preserved accepted evidence. Architecture, deployment, C++20, Release optimization and source mapping agree with accepted CMake cache/summary and tracked target policy. The successful build log is not verbose, so Ninja is observed metadata rather than independent immutable compile-command authority. SDK/source/build/prefix paths are normalized to stable tokens; no Phase 6 input is changed."
 }

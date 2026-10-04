@@ -108,7 +108,7 @@ def _observed_core_flags(project, result):
 
 def _core_build_policy(project, result=None):
     policy = document(project / "config/packaging-core-policy.json")
-    if (policy.get("schema_version") != 1 or not _digest_field(policy.get("archive_sha256"))
+    if (policy.get("schema_version") not in (1, 2) or not _digest_field(policy.get("archive_sha256"))
             or not _digest_field(policy.get("core_input_fingerprint"))):
         raise ValueError("Core build policy identity differs")
     if result is not None:
@@ -298,7 +298,7 @@ def stage_candidate(project, candidate, result):
         }
         for path, value in metadata.items():
             put(candidate, path, canonical(value))
-        manifest = dict(schema_version=1, platform=PLATFORM,
+        manifest = dict(schema_version=build_policy["schema_version"], platform=PLATFORM,
             lock_sha256=sha(canonical_bytes(lock)), dependencies=[asdict(r) for r in lock.dependencies],
             prefix_manifest_sha256={name: report.manifest_sha256 for name, report in sorted(result["reports"].items())},
             core=dict(upstream_commit=core["upstream_commit"], source_manifest_sha256=core["staged_manifest_sha256"],
@@ -373,7 +373,7 @@ def verify_package(package, authority_project, *, fresh_consumer=False, consumer
         _safe_metadata(value)
         metadata[name] = value
     manifest = metadata["metadata/manifest.json"]
-    if set(manifest) != MANIFEST_FIELDS or manifest["schema_version"] != 1:
+    if set(manifest) != MANIFEST_FIELDS or manifest["schema_version"] not in (1, 2):
         raise ValueError("package manifest schema differs")
     if manifest["files"] != list(files):
         raise ValueError("package file inventory differs")
@@ -382,6 +382,8 @@ def verify_package(package, authority_project, *, fresh_consumer=False, consumer
     lock = load_lock(authority / "config/dependencies.lock")
     policy = document(authority / "config/core-reproducible-policy.json")
     source, build_policy = _upstream_source(authority), _core_build_policy(authority)
+    if manifest["schema_version"] != build_policy["schema_version"]:
+        raise ValueError("package and Core build policy identity schemas differ")
     if manifest["lock_sha256"] != sha(canonical_bytes(lock)) or canonical(manifest["dependencies"]) != canonical([asdict(r) for r in lock.dependencies]):
         raise ValueError("package immutable lock pins differ")
     expected_core = dict(upstream_commit=policy["upstream_commit"], source_url=source["url"], build_policy=build_policy,

@@ -23,6 +23,7 @@ from dependency_build import (ToolInventory, _accepted_evidence_matches,
 from dependency_lock import canonical_bytes, load_lock, topological_records
 from dependency_prefix import validate_prefix
 from inspect_core_archive import archive_members, SYMBOL_TABLE_NAMES
+from public_core_identity import public_core_fingerprint
 
 ORDER = (
     ("core", None, "upstream/libairdcpp.a"),
@@ -126,6 +127,7 @@ def validate_inputs(project):
         reports[record.name] = report
     provenance = validate_core_source(project, project / "Source/airdcpp-core", core,
                                       tools, python["invocation_path"])
+    public_fingerprint = public_core_fingerprint(core, provenance)
     for name in ("exit-code.txt", "build-exit-code.txt", "scope-status.txt"):
         if regular(core / name) != b"0\n":
             raise ValueError(f"Core accepted status differs: {name}")
@@ -142,7 +144,7 @@ def validate_inputs(project):
         path = core / relative if owner is None else project / "Build/prefix" / owner / relative
         metadata = ({"source": {"commit": provenance["upstream_commit"]},
                      "source_manifest_sha256": provenance["staged_manifest_sha256"],
-                     "core_input_fingerprint": provenance["core_input_fingerprint"]}
+                     "core_input_fingerprint": public_fingerprint}
                     if owner is None else {"record": asdict(records[owner]),
                         "install_manifest_sha256": reports[owner].manifest_sha256})
         components.append(Component(ordinal, slug, path, dict(metadata, archive_sha256=sha(regular(path)))))
