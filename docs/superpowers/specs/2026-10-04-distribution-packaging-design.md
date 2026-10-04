@@ -49,6 +49,13 @@ include its headers/notices only where the public Core header interface needs
 them. Source licenses and other external public headers must be discovered
 from actual inputs, not inferred solely from component names.
 
+The macOS header inventory follows the enabled upstream target: omit modules
+and `core/io/compress/ZipFile.h`, which upstream removes with its implementation
+on non-Windows platforms. TBB and MSVC-only includes remain inactive under the
+locked platform policy. Retain original source/header notices, the official
+GPLv3 text from `licenses/sources.json`, all redistributed prefix licenses,
+and applicable source notices such as MaxMindDB's `NOTICE`.
+
 Inspect each Mach-O member's external definitions. Reject duplicate strong
 definitions. Classify every repeated weak/coalesced definition with defining
 member identities, actual symbol flags, and an evidence-bound reason for valid
