@@ -805,7 +805,53 @@ class AcquisitionTests(unittest.TestCase):
                     stream.write(b'drift before snapshot authority')
             return original(fd)
         with patch.object(self.a, '_tree_manifest_fd', side_effect=mutate_before_manifest):
-            with self.assertRaisesRegex(self.a.AcquireError, 'Git source drift before publication'):
+            with self.assertRaisesRegex(self.a.AcquireError, 'Git source drift'):
+                self.acquire(record)
+        self.assertTrue(mutated)
+        self.assertFalse((self.project / 'Dependencies/snappy').exists())
+
+    def test_git_unsafe_metadata_before_full_snapshot_is_not_new_authority(self):
+        record, fetch = self.git_record()
+        with patch.object(self.a, '_fetch_git', side_effect=fetch):
+            self.acquire(record, False)
+        shutil.rmtree(self.project / 'Dependencies/snappy')
+        original = self.a._tree_manifest_fd
+        mutated = False
+        def mutate_before_manifest(fd):
+            nonlocal mutated
+            if not mutated and '.git' in os.listdir(fd):
+                mutated = True
+                git_fd = os.open('.git', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                try:
+                    config = os.open('config', os.O_WRONLY | os.O_APPEND, dir_fd=git_fd)
+                    with os.fdopen(config, 'wb') as stream:
+                        stream.write(b'\n[core]\n\tfsmonitor = malicious-command\n')
+                finally:
+                    os.close(git_fd)
+            return original(fd)
+        with patch.object(self.a, '_tree_manifest_fd', side_effect=mutate_before_manifest):
+            with self.assertRaisesRegex(self.a.AcquireError, 'unsafe local Git configuration'):
+                self.acquire(record)
+        self.assertTrue(mutated)
+        self.assertFalse((self.project / 'Dependencies/snappy').exists())
+
+    def test_git_metadata_drift_after_safe_validation_is_not_new_authority(self):
+        record, fetch = self.git_record()
+        with patch.object(self.a, '_fetch_git', side_effect=fetch):
+            self.acquire(record, False)
+        shutil.rmtree(self.project / 'Dependencies/snappy')
+        original = self.a._verify_git
+        mutated = False
+        def mutate_after_validation(root, item, fresh=False):
+            nonlocal mutated
+            result = original(root, item, fresh=fresh)
+            if root.name.startswith('.staging-') and not fresh:
+                mutated = True
+                with (root / '.git/config').open('ab') as stream:
+                    stream.write(b'\n[core]\n\tfsmonitor = malicious-command\n')
+            return result
+        with patch.object(self.a, '_verify_git', side_effect=mutate_after_validation):
+            with self.assertRaisesRegex(self.a.AcquireError, 'drift during publication validation'):
                 self.acquire(record)
         self.assertTrue(mutated)
         self.assertFalse((self.project / 'Dependencies/snappy').exists())

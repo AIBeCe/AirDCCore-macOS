@@ -681,9 +681,12 @@ def _source_publication_sha256(owner: OwnedDirectory, record: DependencyRecord) 
     owner.check()
     if record.source.kind == "archive":
         return record.source.tree_manifest_sha256
+    before_validation = _tree_manifest_fd(owner.fd)
     _verify_git(owner.path, record)
     expected, _ = _git_expected(owner.path, record)
     full_manifest = _tree_manifest_fd(owner.fd)
+    if full_manifest != before_validation:
+        raise AcquireError(f"{record.name}: Git source/metadata drift during publication validation")
     entries = (json.loads(line) for line in full_manifest.splitlines())
     materialized = _manifest(entry for entry in entries
                              if entry["path"] != ".git" and not entry["path"].startswith(".git/"))
