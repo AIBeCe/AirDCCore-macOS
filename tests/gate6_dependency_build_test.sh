@@ -2,12 +2,13 @@
 set -eu
 case "${1:-}" in
   --self-test) [ "$#" -eq 1 ] || exit 64 ;;
-  '')
+  ''|--dependencies-only)
+    [ "$#" -le 1 ] || exit 64
     if [ "${AIRDCCORE_RUN_DEPENDENCY_TESTS:-0}" != 1 ]; then
       printf 'SKIP: set AIRDCCORE_RUN_DEPENDENCY_TESTS=1 for live dependency builds\n'
       exit 0
     fi ;;
-  *) printf 'FAIL: supported argument: --self-test\n' >&2; exit 64 ;;
+  *) printf 'FAIL: supported arguments: --self-test or --dependencies-only\n' >&2; exit 64 ;;
 esac
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 export PYTHONDONTWRITEBYTECODE=1 GIT_OPTIONAL_LOCKS=0
@@ -33,6 +34,7 @@ from unittest.mock import patch
 
 root = Path(sys.argv[1])
 self_test = sys.argv[2:] == ['--self-test']
+dependency_checkpoint = sys.argv[2:] == ['--dependencies-only']
 sys.path.insert(0, str(root/'scripts/lib'))
 from dependency_acquire import acquire_all
 import dependency_build
@@ -244,6 +246,16 @@ def main():
     if {name: report.manifest_sha256 for name, report in repeated.items()} != prefixes:
         fail('second dependency build changed prefix fingerprints')
     unchanged(attestation_before, [attestation], 'confinement attestation')
+    unchanged(source_before, source_paths, 'accepted sources/cache')
+    boundaries(root)
+    if dependency_checkpoint:
+        write('dependency-checkpoint.json', dict(lock_sha256=fingerprint(lock),
+            confinement_attestation_sha256=digest(attestation), prefix_manifests=prefixes,
+            dependency_rerun='PASS: prefixes and component evidence unchanged',
+            sources='PASS: accepted sources/cache unchanged', generated_git_boundary='PASS',
+            distribution='PASS: Dist and aggregate absent', acceptance='NOT Gate 6 acceptance'))
+        print('PASS: dependency checkpoint only; NOT Gate 6 acceptance (Core/consumer/report not executed)')
+        return
     # Do not write any Gate 6 evidence while these scoped child modes run.
     command(root/'scripts/build', '--build-reproducible-core')
     command(root/'scripts/build', '--link-reproducible-consumer')
@@ -284,6 +296,59 @@ def main():
     print('PASS: Gate 6 sandboxed dependency build, unchanged rerun, Core, consumer, closure, and report')
 
 class OfflineContracts(unittest.TestCase):
+    def test_dependency_checkpoint_stops_before_core_consumer_and_report(self):
+        global root, dependency_checkpoint
+        previous = root
+        previous_checkpoint = globals().get('dependency_checkpoint', False)
+        lock = load_lock(root/'config/dependencies.lock')
+        with tempfile.TemporaryDirectory(prefix='gate6-checkpoint-', dir='/private/tmp') as name:
+            root = Path(name)
+            dependency_checkpoint = True
+            for relative in ('Dependencies', 'Build/prefix', 'Build/dependencies', 'scripts', 'config'):
+                (root/relative).mkdir(parents=True)
+            subprocess.run(['git', 'init', '-q', name], check=True)
+            calls = root/'calls.txt'
+            script = root/'scripts/build'
+            script.write_text('#!/bin/sh\ncase "$1" in\n--build-dependencies) printf "dependency\\n" >> '+str(calls)+';;\n*) printf "forbidden\\n" >> '+str(calls)+'; exit 91;;\nesac\n')
+            script.chmod(0o755)
+            attestation = gate_directory()/'dependency-confinement.json'
+            attestation.write_text('bound attestation')
+            from types import SimpleNamespace
+            report = {'fixture': SimpleNamespace(manifest_sha256='a'*64)}
+            try:
+                with patch('__main__.load_lock', return_value=lock), \
+                     patch('__main__.acquire_all'), \
+                     patch('__main__.establish_confinement', return_value=attestation), \
+                     patch('__main__.resolve_tool_inventory', return_value=None), \
+                     patch('__main__.prefix_reports', return_value=report):
+                    main()
+                    calls.unlink()
+                    (root/'Dist').symlink_to('missing')
+                    with self.assertRaisesRegex(ValueError, 'Dist or aggregate'):
+                        main()
+                    self.assertFalse(calls.exists())
+                    (root/'Dist').unlink()
+                    dependency_checkpoint = False
+                    with self.assertRaises(subprocess.CalledProcessError) as rejected:
+                        main()
+                    self.assertIn('--build-reproducible-core', rejected.exception.cmd)
+                    self.assertEqual(calls.read_text().splitlines(), ['dependency','dependency','forbidden'])
+                    dependency_checkpoint = True
+                    calls.unlink()
+                    script.write_text('#!/bin/sh\nprintf "changed" > '+str(root/'Build/prefix/poison')+'\n')
+                    with self.assertRaisesRegex(ValueError, 'changed during no-op'):
+                        main()
+                    script.write_text('#!/bin/sh\ncase "$1" in\n--build-dependencies) printf "dependency\\n" >> '+str(calls)+';;\n*) exit 91;;\nesac\n')
+                    (root/'Build/prefix/poison').unlink()
+                    main()
+                self.assertEqual(calls.read_text().splitlines(), ['dependency','dependency'])
+                evidence = json.loads((root/'Build/gate6/dependency-checkpoint.json').read_text())
+                self.assertEqual(evidence['acceptance'], 'NOT Gate 6 acceptance')
+                self.assertFalse((root/'Build/airdcpp-core').exists())
+            finally:
+                root = previous
+                dependency_checkpoint = previous_checkpoint
+
     def test_core_only_changes_preserve_binding_but_dependency_code_invalidates(self):
         global root
         previous = root
