@@ -2,13 +2,16 @@
 set -eu
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 if [ "$#" -ne 1 ]; then
-  printf 'usage: scripts/build (--configure-only|--build-core|--link-consumer)\n' >&2
+  printf 'usage: scripts/build (--configure-only|--build-core|--link-consumer|--build-dependencies)\nadditional modes: scripts/build (--build-reproducible-core|--link-reproducible-consumer)\n' >&2
   exit 64
 fi
 case "$1" in
   --configure-only) ;;
   --build-core) exec /bin/sh "$PROJECT_ROOT/scripts/lib/core_build.sh" "$PROJECT_ROOT" ;;
   --link-consumer) exec /bin/sh "$PROJECT_ROOT/scripts/lib/link_consumer.sh" "$PROJECT_ROOT" ;;
+  --build-dependencies) exec python3 "$PROJECT_ROOT/scripts/lib/dependency_build.py" --project-root "$PROJECT_ROOT" ;;
+  --build-reproducible-core) exec /bin/sh "$PROJECT_ROOT/scripts/lib/reproducible_core.sh" "$PROJECT_ROOT" ;;
+  --link-reproducible-consumer) exec /bin/sh "$PROJECT_ROOT/scripts/lib/reproducible_consumer.sh" "$PROJECT_ROOT" ;;
   *) printf 'build: error: unsupported build mode: %s\n' "$1" >&2; exit 64 ;;
 esac
 CHECKOUT=$PROJECT_ROOT/Source/airdcpp-core

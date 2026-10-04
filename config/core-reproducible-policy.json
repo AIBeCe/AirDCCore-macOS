@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "upstream_commit": "55d51ceb817ec006d4ec844d9e3788e1b0ccc352",
+  "source_date_epoch": 1774518197,
+  "version": {
+    "tag": "0.0.0",
+    "commit_count": 0,
+    "application_name": "AirDCCore-macOS",
+    "application_id": "org.airdcpp.core.macos.configure"
+  },
+  "stringdefs_sha256": "d7ff5db80e0e6bffa8cdc04065a5c71eb6bcee9a94a1f6d6b58a1b2a4fb75c6c",
+  "patch": {
+    "path": "config/patches/airdcpp-core-55d51ceb-private-build.patch",
+    "sha256": "a2a0454ec5c77460d99f642e8d52e2aded1efc90968b07e2b9a0f53e33874219",
+    "targets": [
+      {"path":"airdcpp/hash/HashStore.cpp","preimage_sha256":"1802573cb2107529848cb1b0df98a9719341a440364b4c1b3180d96a8d0df88a","postimage_sha256":"047b51dbe8a83ad303b4a93cf9ce506673faf63367b336933a8ec95cb72c7476"},
+      {"path":"CMakeLists.txt","preimage_sha256":"450f21cce9d433a4c8d50cf97200e2ca2c05313c913e54c934badb9fbfaed9af","postimage_sha256":"8605186a2cb71d3f1ac158c3b7208affcf1879f6259983b0559b4caf9750ad61"},
+      {"path":"airdcpp/util/NetworkUtil.cpp","preimage_sha256":"b618ccd38d355ce90f6de89f95055ef432f7e2bf5a1f6be5058c3d68faf56d09","postimage_sha256":"7e47d1ab858cebfb5f27d5439a152e174b68b26a8ec3ef081cf72bf3613ee72b"}
+    ]
+  },
+  "rationale": "Keep the original pinned checkout immutable. Build only a private tracked-file stage; replace wall-clock/network version generation with declared metadata and the pinned commit epoch. Abort hash maintenance on non-24-byte keys before copying into the hash data array. Replace NetworkUtil's variable-length address buffer with the constant IPv6 maximum, retaining the selected IPv4/IPv6 inet_ntop length. Preserve strict compiler warnings. Count zero is declared policy, not mutable history depth."
+}

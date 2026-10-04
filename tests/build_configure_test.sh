@@ -144,7 +144,7 @@ for phase in parent upstream; do
  fi
 done
 [ "$snapshot_failures" -eq 0 ] || fail "$snapshot_failures unverifiable snapshot checks succeeded"
-expect_failure 'usage: scripts/build (--configure-only|--build-core|--link-consumer)' "$CASE_ROOT/scripts/build"
+expect_failure 'usage: scripts/build (--configure-only|--build-core|--link-consumer|--build-dependencies)' "$CASE_ROOT/scripts/build"
 expect_failure 'unsupported build mode' "$CASE_ROOT/scripts/build" --compile
 output=$(run_case)
 assert_contains "$output" 'preserved unmodified configure status 1' 'first capture'

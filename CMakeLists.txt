@@ -4,6 +4,7 @@ project(AirDCCoreMacOS LANGUAGES C CXX)
 # Narrow miniupnpc/maxminddb adapters cover formulae without CMake configs.
 list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 include(AirDCCorePolicy)
+option(AIRDCCORE_REPRODUCIBLE_INPUTS "Require declared reproducible dependency prefixes" OFF)
 airdcpp_require_apple_clang()
 
 if("${CMAKE_BUILD_TYPE}" STREQUAL "")
@@ -38,10 +39,22 @@ set(AIRDCPP_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Source/airdcpp-core" CA
 
 # The parent summary must see imports discovered by upstream find_package calls.
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
-add_subdirectory("${AIRDCPP_CORE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/upstream")
+set(AIRDCPP_EFFECTIVE_SOURCE_DIR "${AIRDCPP_CORE_SOURCE_DIR}")
+if(AIRDCCORE_REPRODUCIBLE_INPUTS)
+  if(NOT DEFINED AIRDCCORE_STAGED_SOURCE_DIR OR AIRDCCORE_STAGED_SOURCE_DIR STREQUAL "")
+    message(FATAL_ERROR "private Core source is required in reproducible mode")
+  endif()
+  file(REAL_PATH "${AIRDCCORE_STAGED_SOURCE_DIR}" staged_real)
+  if(NOT staged_real STREQUAL "${CMAKE_BINARY_DIR}/source")
+    message(FATAL_ERROR "private Core source must be the build-owned source directory")
+  endif()
+  set(AIRDCPP_EFFECTIVE_SOURCE_DIR "${staged_real}")
+  airdcpp_define_core_version_command()
+endif()
+add_subdirectory("${AIRDCPP_EFFECTIVE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/upstream")
 set(AIRDCPP_SOURCE_PREFIX_MAP airdcpp-core)
 airdcpp_apply_source_prefix_map(airdcpp
-  "${AIRDCPP_CORE_SOURCE_DIR}" "${AIRDCPP_SOURCE_PREFIX_MAP}")
+  "${AIRDCPP_EFFECTIVE_SOURCE_DIR}" "${AIRDCPP_SOURCE_PREFIX_MAP}")
 
 # Homebrew LevelDB currently exports its own -Werror to every consumer.
 # Keep its thread-safety diagnostic, but do not let a dependency set Core's
@@ -49,6 +62,10 @@ airdcpp_apply_source_prefix_map(airdcpp
 if(NOT TARGET leveldb::leveldb)
   message(FATAL_ERROR "LevelDB imported target was not discovered by upstream")
 endif()
+if(AIRDCCORE_REPRODUCIBLE_INPUTS)
+  include(AirDCCoreLinkAdapters)
+  airdcpp_adapt_reproducible_leveldb()
+else()
 get_target_property(_leveldb_compile_options leveldb::leveldb INTERFACE_COMPILE_OPTIONS)
 if("${_leveldb_compile_options}" MATCHES "-NOTFOUND$")
   message(FATAL_ERROR "LevelDB interface compile options are unavailable")
@@ -62,6 +79,7 @@ endif()
 list(REMOVE_ITEM _leveldb_compile_options "-Werror")
 set_property(TARGET leveldb::leveldb PROPERTY INTERFACE_COMPILE_OPTIONS
   "${_leveldb_compile_options}")
+endif()
 
 set(AIRDCPP_CONFIGURE_SUMMARY "${CMAKE_BINARY_DIR}/airdcpp-configure-summary.txt")
 file(WRITE "${AIRDCPP_CONFIGURE_SUMMARY}"
@@ -88,8 +106,12 @@ file(WRITE "${AIRDCPP_CONFIGURE_SUMMARY}"
   "parent.resource_directory=${RESOURCE_DIRECTORY}\n"
   "parent.global_config_directory=${GLOBAL_CONFIG_DIRECTORY}\n"
   "parent.project_name=${PROJECT_NAME_GLOBAL}\n")
+if(AIRDCCORE_REPRODUCIBLE_INPUTS AND DEFINED AIRDCCORE_STAGED_SOURCE_DIR)
+  file(APPEND "${AIRDCPP_CONFIGURE_SUMMARY}"
+    "effective_upstream_source=${AIRDCPP_EFFECTIVE_SOURCE_DIR}\n")
+endif()
 
-foreach(required_target IN ITEMS
+set(AIRDCPP_REQUIRED_DEPENDENCY_TARGETS
     BZip2::BZip2
     ZLIB::ZLIB
     OpenSSL::SSL
@@ -102,5 +124,10 @@ foreach(required_target IN ITEMS
     Snappy::snappy
     Threads::Threads
     Iconv::Iconv)
+foreach(required_target IN LISTS AIRDCPP_REQUIRED_DEPENDENCY_TARGETS)
   airdcpp_record_target("${required_target}" "${AIRDCPP_CONFIGURE_SUMMARY}")
 endforeach()
+if(AIRDCCORE_REPRODUCIBLE_INPUTS)
+  airdcpp_record_dependency_resolution("${CMAKE_BINARY_DIR}/dependency-resolution.tsv"
+    ${AIRDCPP_REQUIRED_DEPENDENCY_TARGETS})
+endif()
