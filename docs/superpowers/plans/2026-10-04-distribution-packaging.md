@@ -92,8 +92,19 @@ evidence lives under Build or private temporary directories, not Dist metadata.
 - Task 2: complete; byte-bound headers/notices/provenance, verification-only
   contract and atomic publication/rollback; I1/I2 and independent spec/quality
   PASS. Commits `2fe8507`, `f6bfea6`.
-- Task 3: implementation and native Gate 7 PASS; 229 Python regressions PASS.
+- Task 3: complete; independent Task 3 and whole-phase spec/quality PASS, no
+  blocking findings. Implementation commit `0569d28`; 229 Python regressions
+  and fourteen historical script invocations PASS.
   Public proof binds archive/header/probe inputs without checksum recursion;
   fresh verification compiles/links/runs from relocated Dist only. Both
   contextual header fragments retain original bytes and documented context.
-  Independent review and local integration remain pending; no Phase 8 start.
+  Root's fresh complete Gate 7 PASS (194.039 s), with identical published hashes,
+  zero private-input reads and all negative cases rejected. Final implementation
+  tree clean; generated outputs untracked/ignored. Local GitFlow integration
+  follows this completion checkpoint; no Phase 8 start or remote publication.
+
+All three Phase 7 tasks and Gate 7 are complete. The independent review reports
+are retained in the phase's ignored execution workspace. Richer per-file
+preservation receipt formatting was nonblocking and deferred; this gate proves
+same-input deterministic aggregate construction and package reruns, not Phase 8
+full clean-build reproducibility, minimum-OS runtime or release readiness.
