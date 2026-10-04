@@ -33,11 +33,11 @@
 
 **Interfaces:** Consumes validated private Core evidence; produces a normalized public Core fingerprint. Private Core provenance and validators are unchanged. Schema 2 policy pins the normalized fingerprint; exact artifact/tool/source/flag checks remain.
 
-- [ ] Write behavior tests: relocated staging authority produces equal public digest; source/generator/tool/implementation changes do not; wrong private digest/stage identity rejected; actual schema-2 package flow preserves binding.
-- [ ] Run tests and observe RED before implementation.
-- [ ] Implement exact normalization defined in spec, integrate only public identity construction/validation, derive schema-2 pin from accepted preserved evidence.
-- [ ] Run focused tests and full `python3 -m unittest discover -s tests -p '*_test.py'`; do not rebuild preserved inputs or replace Dist.
-- [ ] Commit; report RED/GREEN and immutable old-output preservation evidence; independent task review PASS.
+- [x] Write behavior tests: relocated staging authority produces equal public digest; source/generator/tool/implementation changes do not; wrong private digest/stage identity rejected; actual schema-2 package flow preserves binding.
+- [x] Run tests and observe RED before implementation.
+- [x] Implement exact normalization defined in spec, integrate only public identity construction/validation, derive schema-2 pin from accepted preserved evidence.
+- [x] Run focused tests and full `python3 -m unittest discover -s tests -p '*_test.py'`; do not rebuild preserved inputs or replace Dist.
+- [x] Commit; report RED/GREEN and immutable old-output preservation evidence; independent task review PASS.
 
 ### Task 2: Verify/clean entry points and Gate 8 driver
 
@@ -45,10 +45,10 @@
 
 **Interfaces:** Public verify delegates to complete existing verification; clean operates on its own project root only. Gate 8 drives existing update/build/package entry points in fresh tracked Git checkouts and writes bound receipts outside their scope. Rehearsal uses only owned disposable repository refs.
 
-- [ ] Write tests for CLI exit/error behavior, package drift failure, dirty-source/track preservation, top-level symlink rejection before mutation, failed run/partial receipt rejection, exact inventory difference rejection, release bootstrap/tag/merge-back behavior and real-ref preservation.
-- [ ] Observe RED; implement minimal driver/entry points per spec, no new build framework. Avoid duplicating package verifier logic.
-- [ ] Run focused tests and full Python regression suite. Test clean against disposable fixtures, never authoritative native outputs.
-- [ ] Commit; independently review spec and quality to PASS.
+- [x] Write tests for CLI exit/error behavior, package drift failure, dirty-source/track preservation, top-level symlink rejection before mutation, failed run/partial receipt rejection, exact inventory difference rejection, release bootstrap/tag/merge-back behavior and real-ref preservation.
+- [x] Observe RED; implement minimal driver/entry points per spec, no new build framework. Avoid duplicating package verifier logic.
+- [x] Run focused tests and full Python regression suite. Test clean against disposable fixtures, never authoritative native outputs.
+- [x] Commit; independently review spec and quality to PASS.
 
 ### Task 3: Two clean builds, measured release rehearsal and Gate 8 report
 
