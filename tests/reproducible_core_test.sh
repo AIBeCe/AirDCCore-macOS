@@ -53,20 +53,36 @@ class ControlledCoreTests(unittest.TestCase):
         shutil.copytree(ROOT / 'config', cls.template / 'config')
         shutil.copytree(ROOT / 'cmake', cls.template / 'cmake')
         shutil.copy2(ROOT / 'CMakeLists.txt', cls.template / 'CMakeLists.txt')
+        # The current lock reader requires its sole dependency patch tracked in
+        # the consuming project. Model that real boundary in the copied fixture.
+        subprocess.run(('git','init','-q',str(cls.template)),check=True)
+        for key,value in (('user.name','Tests'),('user.email','tests@example.invalid'),('commit.gpgsign','false')):
+            subprocess.run(('git','-C',str(cls.template),'config',key,value),check=True)
+        subprocess.run(('git','-C',str(cls.template),'add','config'),check=True)
+        subprocess.run(('git','-C',str(cls.template),'commit','-qm','tracked lock fixtures'),check=True)
         checkout = cls.template / 'Source/airdcpp-core'
         checkout.mkdir(parents=True)
         subprocess.run(('git', 'init', '-q', str(checkout)), check=True)
         write(checkout / 'state.txt', 'pinned\n')
+        for relative in ('CMakeLists.txt','airdcpp/hash/HashStore.cpp','scripts/generate_version.py',
+                         'scripts/generate_stringdefs.py','airdcpp/core/localization/StringDefs.h'):
+            target=checkout/relative
+            target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(ROOT/'Source/airdcpp-core'/relative,target)
         for name, value in (('user.name', 'Tests'), ('user.email', 'tests@example.invalid'),
                             ('commit.gpgsign', 'false')):
             subprocess.run(('git', '-C', str(checkout), 'config', name, value), check=True)
-        subprocess.run(('git', '-C', str(checkout), 'add', 'state.txt'), check=True)
-        subprocess.run(('git', '-C', str(checkout), 'commit', '-qm', 'fixture'), check=True)
+        subprocess.run(('git', '-C', str(checkout), 'add', '.'), check=True)
+        subprocess.run(('git', '-C', str(checkout), 'commit', '-qm', 'fixture'), check=True,
+                       env={**os.environ,'GIT_AUTHOR_DATE':'1774518197 +0000','GIT_COMMITTER_DATE':'1774518197 +0000'})
         pin = run('git', '-C', str(checkout), 'rev-parse', 'HEAD').stdout.strip()
         subprocess.run(('git', '-C', str(checkout), 'checkout', '-q', '--detach'), check=True)
         subprocess.run(('git', '-C', str(checkout), 'remote', 'add', 'origin', 'https://example.invalid/core.git'), check=True)
         write(cls.template / 'config/upstream.env',
               f'AIRDCPP_CORE_URL=https://example.invalid/core.git\nAIRDCPP_CORE_COMMIT={pin}\n')
+        policy=json.loads((cls.template/'config/core-reproducible-policy.json').read_text())
+        policy['upstream_commit']=pin
+        write(cls.template/'config/core-reproducible-policy.json',json.dumps(policy))
         # Stub external tool discovery only. Prefix inspection, acceptance checks,
         # fingerprints, scope checks and orchestration execute production code.
         sdk_fixture = cls.work / 'SDK with spaces'
@@ -102,6 +118,15 @@ if control.get('MUTATE'):
     Path(control['MUTATE']).write_text('unexpected mutation')
 if args[0]=='--build':
     if control.get('BUILD_FAIL'): sys.exit(29)
+    import subprocess, hashlib
+    authority=out/'version-authority.json'
+    version=json.loads(authority.read_text())
+    staged=Path(version['staged_root'])
+    subprocess.run([sys.executable,str(staged.parent.parent.parent.parent/'scripts/lib/core_stage.py'),
+                    'version',str(authority),hashlib.sha256(authority.read_bytes()).hexdigest(),'--',
+                    sys.executable,'scripts/generate_version.py','./airdcpp/core/version.inc','0.0.0',
+                    'AirDCCore-macOS','org.airdcpp.core.macos.configure'],cwd=staged,check=True)
+    subprocess.run([sys.executable,'scripts/generate_stringdefs.py','./airdcpp/core/localization/'],cwd=staged,check=True)
     if control.get('REAL_GENERATOR'):
         import subprocess
         result = subprocess.run([{cls.real_cmake!r}, '--build', str(out),
@@ -304,15 +329,32 @@ else:
             write(checkout/'generate_fixture.py',
                   'from pathlib import Path\nimport sys\n'
                   'Path(sys.argv[1]).write_text(sys.executable+"\\n")\n')
-        write(checkout / 'CMakeLists.txt', '\n'.join(lines) + '\n')
+        upstream=(ROOT/'Source/airdcpp-core/CMakeLists.txt').read_text()
+        version_block=upstream[upstream.index('if (NOT CMAKE_BUILD_TYPE STREQUAL Debug'):upstream.index('# Stringdefs')]
+        version_block=version_block.replace('add_dependencies(${PROJECT_NAME} version)','add_dependencies(airdcpp version)')
+        fixture_cmake='\n'.join(lines)+'\n'+version_block
+        write(checkout / 'CMakeLists.txt', fixture_cmake)
         tracked = ['CMakeLists.txt', *(['generate_fixture.py'] if with_generator else [])]
         subprocess.run(('git', '-C', str(checkout), 'add', *tracked), check=True)
         subprocess.run(('git', '-C', str(checkout), 'commit', '-qm',
-                        'complete summary fixture'), check=True)
+                        'complete summary fixture'), check=True,
+                       env={**os.environ,'GIT_AUTHOR_DATE':'1774518197 +0000','GIT_COMMITTER_DATE':'1774518197 +0000'})
         pin = run('git', '-C', str(checkout), 'rev-parse', 'HEAD').stdout.strip()
         write(self.case / 'config/upstream.env',
               'AIRDCPP_CORE_URL=https://example.invalid/core.git\n'
               f'AIRDCPP_CORE_COMMIT={pin}\n')
+        policy=json.loads((self.case/'config/core-reproducible-policy.json').read_text())
+        policy['upstream_commit']=pin
+        patched_cmake=fixture_cmake.replace('  find_package (Git)\n',
+            '  if (NOT AIRDCCORE_VERSION_COMMAND)\n'
+            '    message(FATAL_ERROR "Private Core version command authority is required")\n  endif()\n'
+            '  find_package (Git)\n')
+        patched_cmake=patched_cmake.replace(
+            'COMMAND ${PYTHON_EXECUTABLE} scripts/generate_version.py ./airdcpp/core/version.inc ${VERSION} ${TAG_APPLICATION} ${APPLICATION_ID}',
+            'COMMAND ${AIRDCCORE_VERSION_COMMAND}')
+        policy['patch']['targets'][1]['preimage_sha256']=hashlib.sha256(fixture_cmake.encode()).hexdigest()
+        policy['patch']['targets'][1]['postimage_sha256']=hashlib.sha256(patched_cmake.encode()).hexdigest()
+        write(self.case/'config/core-reproducible-policy.json',json.dumps(policy))
         result = self.invoke(REAL_CONFIGURE='1', **({'REAL_GENERATOR':'1'} if with_generator else {}))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         summary = (self.output / 'airdcpp-configure-summary.txt').read_text()
@@ -320,6 +362,7 @@ else:
         self.assertIn('parent.global_config_directory=Library/Application Support/AirDC++\n', summary)
         self.assertIn('sdk=' + self.tools.sdkroot + '\n', summary)
         self.assertIn('upstream_source=' + str(checkout) + '\n', summary)
+        self.assertIn('effective_upstream_source='+str(self.output/'source')+'\n',summary)
         self.assertIn('target.include_directories='
                       + str(self.case / 'Build/prefix/bzip2/include') + ';'
                       + str(self.case / 'Build/prefix/bzip2/include/headers with spaces')
@@ -346,8 +389,28 @@ else:
     def test_failure_records_status_and_enforces_whole_project_scope(self):
         self.failed('Core build failed', BUILD_FAIL='1')
         self.assertEqual((self.output/'build-exit-code.txt').read_text(), '29\n')
-        self.failed('scope changed outside reproducible-release', BUILD_FAIL='1',
-                    MUTATE=str(self.case/'Build/prefix/bzip2/include/bzlib.h'))
+        result=self.failed('scope changed outside reproducible-release', BUILD_FAIL='1',
+                           MUTATE=str(self.case/'Build/prefix/bzip2/include/bzlib.h'))
+        self.assertIn('Core build failed',result.stderr)
+        for name in ('scope-before.json','scope-after.json'):
+            self.assertTrue((self.output/name).is_file())
+
+    def test_preserves_previous_attempt_and_generated_source_forensics(self):
+        write(self.output/'build.log','previous failed native log\n')
+        write(self.output/'build-exit-code.txt','1\n')
+        checkout=self.case/'Source/airdcpp-core'
+        write(checkout/'.git/info/exclude','/airdcpp/core/version.inc\n')
+        write(checkout/'airdcpp/core/version.inc','original forensic version\n')
+        before=(checkout/'airdcpp/core/version.inc').stat()
+        result=self.invoke()
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        attempt=self.output/'attempts/0001'
+        self.assertTrue((attempt/'build.log').is_file(),'previous failed output was not preserved')
+        self.assertEqual((attempt/'build.log').read_text(),'previous failed native log\n')
+        self.assertEqual((attempt/'source-generated-forensics/airdcpp/core/version.inc').read_text(),
+                         'original forensic version\n')
+        self.assertEqual((checkout/'airdcpp/core/version.inc').read_text(),'original forensic version\n')
+        self.assertEqual(before.st_mtime_ns,(checkout/'airdcpp/core/version.inc').stat().st_mtime_ns)
 
     def test_success_also_enforces_scope(self):
         self.failed('scope changed outside reproducible-release',
@@ -367,7 +430,7 @@ else:
         outside = self.work/'held-version.inc'
         write(outside, 'external\n')
         generated = checkout/'airdcpp/core/version.inc'
-        generated.parent.mkdir(parents=True)
+        generated.parent.mkdir(parents=True,exist_ok=True)
         generated.symlink_to(outside)
         self.failed('unsafe regular file')
         self.assertFalse(self.calls.exists())

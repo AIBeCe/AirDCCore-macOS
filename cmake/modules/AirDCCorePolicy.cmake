@@ -251,3 +251,33 @@ function(airdcpp_record_target target output)
       "target.imported_location.${configuration}=${configuration_location}\n")
   endforeach()
 endfunction()
+function(airdcpp_define_core_version_command)
+  if(NOT CMAKE_GENERATOR STREQUAL "Ninja")
+    message(FATAL_ERROR "controlled Core version requires Ninja")
+  endif()
+  foreach(required AIRDCCORE_STAGED_SOURCE_DIR AIRDCCORE_VERSION_AUTHORITY
+      AIRDCCORE_VERSION_AUTHORITY_SHA256 AIRDCCORE_VERSION_ADAPTER PYTHON_EXECUTABLE)
+    if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+      message(FATAL_ERROR "missing controlled Core version authority: ${required}")
+    endif()
+  endforeach()
+  file(SHA256 "${AIRDCCORE_VERSION_AUTHORITY}" actual_authority)
+  if(NOT actual_authority STREQUAL AIRDCCORE_VERSION_AUTHORITY_SHA256)
+    message(FATAL_ERROR "Core version authority sha256 mismatch")
+  endif()
+  if(NOT VERSION STREQUAL "0.0.0" OR NOT TAG_APPLICATION STREQUAL "AirDCCore-macOS" OR
+      NOT APPLICATION_ID STREQUAL "org.airdcpp.core.macos.configure")
+    message(FATAL_ERROR "unreviewed Core version metadata")
+  endif()
+  # The sole hash-bound private CMake patch substitutes only version's COMMAND.
+  # Do not override a builtin or widen launchers to other custom targets.
+  set(expected_command "${PYTHON_EXECUTABLE}" "${AIRDCCORE_VERSION_ADAPTER}" version
+    "${AIRDCCORE_VERSION_AUTHORITY}" "${AIRDCCORE_VERSION_AUTHORITY_SHA256}" --
+    "${PYTHON_EXECUTABLE}" scripts/generate_version.py ./airdcpp/core/version.inc
+    "${VERSION}" "${TAG_APPLICATION}" "${APPLICATION_ID}")
+  if(DEFINED AIRDCCORE_VERSION_COMMAND AND NOT "${AIRDCCORE_VERSION_COMMAND}" STREQUAL "" AND
+      NOT "${AIRDCCORE_VERSION_COMMAND}" STREQUAL "${expected_command}")
+    message(FATAL_ERROR "unreviewed Core version command authority")
+  endif()
+  set(AIRDCCORE_VERSION_COMMAND "${expected_command}" PARENT_SCOPE)
+endfunction()

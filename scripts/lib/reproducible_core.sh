@@ -17,11 +17,13 @@ import subprocess
 import sys
 
 root = Path(sys.argv[1])
+os.umask(0o022)
 sys.path.insert(0, str(root / 'scripts/lib'))
 from dependency_build import (BuildError, _accepted_evidence_matches, _canonical_json,
                               _input_document, _pinned_tools, adapter_path, resolve_tool_inventory)
 from dependency_lock import canonical_bytes, load_lock, topological_records
 from dependency_prefix import validate_prefix
+from core_stage import prepare_core_source, finalize_core_source, preserve_core_attempt
 
 ORDER = ('bzip2', 'zlib', 'openssl', 'miniupnpc', 'leveldb', 'libmaxminddb', 'snappy', 'boost')
 TARGETS = ('BZip2::BZip2', 'ZLIB::ZLIB', 'OpenSSL::SSL', 'OpenSSL::Crypto',
@@ -114,6 +116,10 @@ def check_summary(prefixes, sdk, toolchain, tools):
             if value != str(root/'Source/airdcpp-core'):
                 fail('unexpected Core source in configure summary')
             continue
+        if key == 'effective_upstream_source':
+            if value != str(output/'source'):
+                fail('unexpected effective Core source in configure summary')
+            continue
         if key in scalar_paths:
             paths = (value,)
         elif key in path_lists:
@@ -201,6 +207,11 @@ def main():
         if any(p.is_symlink() for p in output.rglob('*')):
             fail('symlinked reproducible output path')
     before = snapshot()
+    # Archive previous evidence before any validation failure can write fresh
+    # scope diagnostics. Only the already-validated owned output is moved.
+    if output.exists():
+        preserve_core_attempt(output, root/'Source/airdcpp-core')
+    primary_error = None
     try:
         subprocess.run(('/bin/sh', '-c', '. "$1/scripts/lib/upstream.sh"; '
                         '. "$1/scripts/lib/configure.sh"; '
@@ -259,6 +270,7 @@ def main():
             'origin': subprocess.check_output(('git', '-C', str(checkout), 'remote', 'get-url', '--all', 'origin'), text=True).strip(),
             'source_prefix_map': 'airdcpp-core'}))
         write('scope-before.sha256', hashlib.sha256(_canonical_json(before)).hexdigest()+'\n')
+        write('scope-before.json', _canonical_json(before))
         write('lock-fingerprint.txt', hashlib.sha256(canonical_bytes(lock)).hexdigest()+'\n')
         write('component-manifests.tsv', 'component\tmanifest_sha256\n'+''.join(
             f'{name}\t{reports[name].manifest_sha256}\n' for name in ORDER))
@@ -269,6 +281,7 @@ def main():
                        'PKG_CONFIG_PATH': '', 'PKG_CONFIG_LIBDIR': os.pathsep.join(
                            str(prefixes[n]/'lib/pkgconfig') for n in ORDER),
                        'MACOSX_DEPLOYMENT_TARGET': '14.0', 'ZERO_AR_DATE': '1',
+                       'SOURCE_DATE_EPOCH': '1774518197',
                        'PYTHONDONTWRITEBYTECODE': '1', 'GIT_OPTIONAL_LOCKS': '0'}
         # No ambient CMake, compiler, pkg-config or library search variables.
         write('environment.json', _canonical_json(environment))
@@ -283,9 +296,14 @@ def main():
             'version': subprocess.check_output((str(python_invocation), '--version'),
                 stderr=subprocess.STDOUT, text=True, env=environment).strip(),
         }))
+        staged = prepare_core_source(root, checkout, output, tools, environment, str(python_invocation))
         argv = [tools.host['cmake'], '--fresh', '-S', str(root), '-B', str(output), '-G', 'Ninja',
                 '-DCMAKE_TOOLCHAIN_FILE='+str(root/'cmake/toolchains/macos-arm64.cmake'),
                 '-DPYTHON_EXECUTABLE='+str(python_invocation),
+                '-DAIRDCCORE_STAGED_SOURCE_DIR='+staged['staged_root'],
+                '-DAIRDCCORE_VERSION_ADAPTER='+str(root/'scripts/lib/core_stage.py'),
+                '-DAIRDCCORE_VERSION_AUTHORITY='+staged['version_authority'],
+                '-DAIRDCCORE_VERSION_AUTHORITY_SHA256='+staged['version_authority_sha256'],
                 '-DCMAKE_MAKE_PROGRAM='+tools.host['ninja'], '-DCMAKE_OSX_SYSROOT='+str(sdk),
                 '-DAIRDCCORE_REPRODUCIBLE_INPUTS=ON', '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
                 '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF', '-DCMAKE_FIND_PACKAGE_NO_PACKAGE_REGISTRY=ON',
@@ -311,6 +329,7 @@ def main():
         check_summary(prefixes, sdk, toolchain, tools)
         command([tools.host['cmake'], '--build', str(output), '--target', 'airdcpp',
                  '--config', 'Release', '--parallel', '2'], 'build.log', 'build-exit-code.txt', environment)
+        finalize_core_source(root, checkout, output, tools, str(python_invocation))
         archive = output/'upstream/libairdcpp.a'
         safe_directory(archive.parent)
         if not regular(archive):
@@ -328,17 +347,22 @@ def main():
         write('path-leak-scan.txt', 'PASS: no prohibited archive paths\n' if not leaks else '\n'.join(leaks)+'\n')
         if leaks:
             fail('archive contains a prohibited absolute path')
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        primary_error = error
+        raise
     finally:
         after = snapshot()
         if output.exists() and not output.is_symlink():
             write('scope-after.sha256', hashlib.sha256(_canonical_json(after)).hexdigest()+'\n')
+            write('scope-after.json', _canonical_json(after))
             write('scope-status.txt', '0\n' if after == before else '1\n')
         if after != before:
             initial = {entry[0]: entry for entry in before}
             final = {entry[0]: entry for entry in after}
             changed = sorted(path for path in initial.keys() | final.keys()
                              if initial.get(path) != final.get(path))
-            fail('scope changed outside reproducible-release: '+', '.join(changed[:12]))
+            scope_error = 'scope changed outside reproducible-release: '+', '.join(changed[:12])
+            fail((str(primary_error)+'; additionally: ' if primary_error else '')+scope_error)
     print(f'build: reproducible Core archive candidate={output}/upstream/libairdcpp.a')
 
 try:

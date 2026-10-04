@@ -1,0 +1,19 @@
+--- a/airdcpp/hash/HashStore.cpp
++++ b/airdcpp/hash/HashStore.cpp
+@@ -404,1 +404,3 @@
+-				memcpy(&curRoot, aKey, key_len);
++				if (key_len != sizeof(curRoot.data))
++					throw DbException("Invalid Tiger-tree hash key length");
++				memcpy(curRoot.data, aKey, sizeof(curRoot.data));
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -129,2 +129,5 @@
+ if (NOT CMAKE_BUILD_TYPE STREQUAL Debug OR NOT EXISTS "${PROJECT_SOURCE_DIR}/airdcpp/core/version.inc")
++  if (NOT AIRDCCORE_VERSION_COMMAND)
++    message(FATAL_ERROR "Private Core version command authority is required")
++  endif()
+   find_package (Git)
+@@ -133,2 +136,2 @@
+-    COMMAND ${PYTHON_EXECUTABLE} scripts/generate_version.py ./airdcpp/core/version.inc ${VERSION} ${TAG_APPLICATION} ${APPLICATION_ID}
++    COMMAND ${AIRDCCORE_VERSION_COMMAND}
+     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
