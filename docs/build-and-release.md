@@ -217,9 +217,12 @@ are shared. Build/airdcpp-core is created before the existing Core command needs
 its parent; the Phase 6 build implementation is unchanged.
 
 Each run repeats acquisition and dependency build and compares both bytes and
-filesystem identities/timestamps to establish a no-op. It then repeats Core,
-private consumer, packaging and verification, comparing the exact Core archive
-and full public inventory before/after. Across roots, full Dist directories,
+filesystem identities/timestamps to establish a no-op. Both acquisition/build/
+Core/private-consumer passes complete before either packaging pass: the private
+consumer requires Dist to remain absent. The exact repeated Core archive and
+input identities must match before publication. Packaging and public verification
+then run twice, comparing the first verified full public inventory with the
+second. Across roots, full Dist directories,
 file modes and content digests must agree; matching only aggregate archives is
 insufficient. Drift fails the experiment without repinning or semantic fallback.
 

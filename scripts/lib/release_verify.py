@@ -27,7 +27,12 @@ COMMANDS = (
     ("package", ("scripts/package",)),
     ("verify", ("scripts/verify",)),
 )
-ALL_COMMANDS = COMMANDS + tuple(("repeat-" + phase, argv) for phase, argv in COMMANDS)
+ALL_COMMANDS = (
+    COMMANDS[:5]
+    + tuple(("repeat-" + phase, argv) for phase, argv in COMMANDS[:5])
+    + COMMANDS[5:]
+    + tuple(("repeat-" + phase, argv) for phase, argv in COMMANDS[5:])
+)
 
 
 class ReleaseError(ValueError):
@@ -273,10 +278,8 @@ def run_clean_builds(project):
         for root, directory, receipt in runs:
             try:
                 before_noops, first_inventory, first_core = None, None, None
-                for index, (phase, argv) in enumerate(ALL_COMMANDS):
-                    if index == len(COMMANDS):
-                        first_inventory = distribution_inventory(root / "Dist")
-                        (directory / "first-dist-inventory.json").write_bytes(canonical(first_inventory))
+                for phase, argv in ALL_COMMANDS:
+                    if phase == "repeat-update":
                         before_noops = _noop_snapshot(root)
                     if phase in ("core", "repeat-core"):
                         (root / "Build/airdcpp-core").mkdir(parents=True, exist_ok=True)
@@ -292,6 +295,9 @@ def run_clean_builds(project):
                             raise ValueError("repeated Core archive/private/public identity differs")
                         receipt.update(core_archive_sha256=repeated_core["archive_sha256"],
                             core_rerun_identity_equal=True, core_identity_sha256=sha(canonical(repeated_core)))
+                    elif phase == "verify":
+                        first_inventory = distribution_inventory(root / "Dist")
+                        (directory / "first-dist-inventory.json").write_bytes(canonical(first_inventory))
                     if phase == "repeat-dependency-build":
                         after_noops = _noop_snapshot(root)
                         raw_noops = canonical(dict(before=before_noops, after=after_noops))

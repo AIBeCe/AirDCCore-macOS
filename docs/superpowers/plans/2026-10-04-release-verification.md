@@ -56,6 +56,7 @@
 
 **Interfaces:** Consumes frozen reviewed Task 1–2 implementation and Gate 8 driver; produces retained native run receipts, complete fourteen-criterion acceptance map and reviewed Gate 8 verdict.
 
+- [x] Correct the native retry2 driver-order blocker: both input/Core/private-consumer passes precede both package/verify passes, preserving the existing Dist-absence policy and all fourteen commands. Regression verification and scoped independent review are required before freezing the corrected implementation.
 - [ ] Freeze code; run opt-in Gate 8 in two fresh independent roots, acquisition through packaging/verification; repeat safe update/build and compare exact complete package inventories.
 - [ ] Diagnose only blockers; do not loosen archive/input policy to mask mismatches. Record any material new conflict for Root.
 - [ ] Run isolated GitFlow rehearsal and cleanup safety tests; independent public verification and regression.

@@ -159,6 +159,10 @@ elif mode=="build" and sys.argv[2]=="--build-reproducible-core":
  for name,value in (("version-authority.json",authority),("core-inputs.json",inputs),("core-source-provenance.json",proof),("tool-inventory.json",dict(sdk="fixture"))): put(core/name,canonical(value))
  put(core/"core-input-fingerprint.txt",(digest(inputs)+"\\n").encode())
  put(core/"upstream/libairdcpp.a",b"core fixture")
+elif mode=="build" and sys.argv[2]=="--link-reproducible-consumer":
+ if (root/"Dist").exists() or (root/"Dist").is_symlink():
+  print("build: error: reproducible consumer: Dist already exists",file=sys.stderr)
+  sys.exit(1)
 elif mode=="package":
  core=root/"Build/airdcpp-core/reproducible-release"
  authority=json.loads((core/"version-authority.json").read_bytes())
@@ -184,6 +188,34 @@ elif mode=="verify":
         self.addCleanup(shutil.rmtree, result["evidence"])
         self.addCleanup(shutil.rmtree, Path(result["release_rehearsal"]["repository"]).parent)
         return Path(result["evidence"])
+
+    def test_private_consumer_repeats_before_both_publication_passes(self):
+        evidence = self.successful_fixture()
+        expected_phases = [
+            "update", "dependencies", "dependency-build", "core",
+            "private-consumer",
+            "repeat-update", "repeat-dependencies", "repeat-dependency-build",
+            "repeat-core", "repeat-private-consumer",
+            "package", "verify", "repeat-package", "repeat-verify",
+        ]
+        for ordinal in (1, 2):
+            directory = evidence / f"run-{ordinal}"
+            receipt = json.loads((directory / "receipt.json").read_bytes())
+            commands = receipt["commands"]
+            self.assertEqual(receipt["result"], "PASS")
+            self.assertEqual(len(commands), 14)
+            self.assertEqual(
+                [command["phase"] for command in commands], expected_phases
+            )
+            self.assertTrue(all(command["status"] == 0 for command in commands))
+            for argv in (["scripts/package"], ["scripts/verify"]):
+                self.assertEqual(
+                    sum(command["argv"] == argv for command in commands), 2
+                )
+            self.assertEqual(
+                json.loads((directory / "first-dist-inventory.json").read_bytes()),
+                json.loads((directory / "final-dist-inventory.json").read_bytes()),
+            )
 
     def test_two_complete_fixture_runs_compare_actual_full_content(self):
         evidence = self.successful_fixture()
