@@ -245,3 +245,9 @@ It does not assert a physically fresh machine, actual macOS 14 execution, or
 complete all fourteen release acceptance criteria by itself. Gate 8 acceptance
 requires the complete measured criterion map and independent review before
 integration; production promotion remains a separate decision.
+
+The recorded experiment at `5dc4699` passed both complete clean-root workflows,
+exact full Dist comparison, cleanup tests and isolated release rehearsals. The
+original fresh-machine criterion remains unestablished: Gate 8 is incomplete,
+and the feature must not merge to develop until that evidence exists or the user
+explicitly changes the acceptance scope. See the Gate 8 report in `docs/reports`.

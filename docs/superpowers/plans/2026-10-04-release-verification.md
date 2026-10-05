@@ -57,8 +57,19 @@
 **Interfaces:** Consumes frozen reviewed Task 1–2 implementation and Gate 8 driver; produces retained native run receipts, complete fourteen-criterion acceptance map and reviewed Gate 8 verdict.
 
 - [x] Correct the native retry2 driver-order blocker: both input/Core/private-consumer passes precede both package/verify passes, preserving the existing Dist-absence policy and all fourteen commands. Regression verification and scoped independent review are required before freezing the corrected implementation.
-- [ ] Freeze code; run opt-in Gate 8 in two fresh independent roots, acquisition through packaging/verification; repeat safe update/build and compare exact complete package inventories.
-- [ ] Diagnose only blockers; do not loosen archive/input policy to mask mismatches. Record any material new conflict for Root.
-- [ ] Run isolated GitFlow rehearsal and cleanup safety tests; independent public verification and regression.
-- [ ] Record exact commands/statuses, root ownership/clean start, pins/tool/OS identity, original/private versus normalized Core fingerprints, full Dist comparison and limits.
+- [x] Freeze code; run opt-in Gate 8 in two fresh independent roots, acquisition through packaging/verification; repeat safe update/build and compare exact complete package inventories.
+- [x] Diagnose only blockers; do not loosen archive/input policy to mask mismatches. Record any material new conflict for Root.
+- [x] Run isolated GitFlow rehearsal and cleanup safety tests; independent public verification and regression.
+- [x] Record exact commands/statuses, root ownership/clean start, pins/tool/OS identity, original/private versus normalized Core fingerprints, full Dist comparison and limits.
+- [x] Independent Task 3 implementation/spec/quality and native evidence/report accuracy review: PASS, no additional blocking findings; original fresh-machine acceptance remains unestablished.
 - [ ] Independently review Task 3 evidence and whole phase. Gate 8 only PASS if its measurable criteria are genuinely established. Commit completion docs, integrate via GitFlow and push only after PASS. If external state or release authorization prevents PASS, report exact remaining requirement without claiming completion.
+
+Native experiment at frozen `5dc469927c3c0b897f1f572eba2ee0bef516840a`: PASS,
+all 28 commands; exact full Dist comparison; six cleanup fixtures and an isolated
+release rehearsal pass independently against each fresh implementation. Root
+independently revalidated the bound receipts. Report:
+`docs/reports/2026-10-04-gate-8-release-verification.md`.
+Original criterion 1 requires a fresh machine; both roots used the same declared
+host. That criterion is not established. Gate 8 and final Task 3 integration
+remain incomplete pending fresh-machine evidence or explicit user acceptance
+scope approval. Do not merge to develop or claim release readiness meanwhile.
