@@ -1,0 +1,90 @@
+# Dependency policy and inspected snapshot
+
+The authoritative dependency strategy is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md). This page records the concise current snapshot for future investigation.
+
+## Verified direct CMake dependencies
+
+At inspected AirDC++ Core commit `55d51ceb817ec006d4ec844d9e3788e1b0ccc352`, the single upstream `CMakeLists.txt` declares:
+
+| Class | Packages |
+| --- | --- |
+| Required | BZip2, ZLIB, OpenSSL, miniupnpc, leveldb, maxminddb, Boost 1.70+ components `regex` and `thread` |
+| Required for a static build | Snappy |
+| Required for a native non-Windows build | Threads and Iconv |
+| Optional, probed when enabled | natpmp; TBB |
+
+The non-Windows defaults are `BUILD_CORE_MODULES=OFF`, `ENABLE_NATPMP=ON`, and `ENABLE_TBB=ON`. NAT-PMP and TBB are used only if their package lookup succeeds.
+
+Boost `system`, nlohmann-json, WebSocket++, and npm are not direct dependencies declared by the inspected core CMake. They must not be added to the core distribution merely because broader AirDC++ products publish them as prerequisites. They may enter the recorded link closure only if a real build or downstream smoke link proves they are needed.
+
+As of the 2026-09-04 design review, the [official Homebrew formula page](https://formulae.brew.sh/formula/websocketpp) labels WebSocket++ disabled. It is therefore a known pinned-source candidate if later evidence brings it into this project's link or public-header closure; its disabled formula is not evidence that the current core needs it.
+
+## Strategy
+
+Homebrew is preferred for host tools and first-build discovery. It is not an acceptable invisible runtime contract for a published `Dist`. Each non-system link input must eventually be one of:
+
+- a pinned source build reconstructed from a version, URL, and checksum or commit;
+- a pinned, integrity-checked packaged archive whose provenance and license are recorded; or
+- a deliberately external system/SDK library documented in the link-interface metadata.
+
+Source dependencies belong in top-level `Dependencies`, never under `Source`. The entire downloaded directory is ignored and reconstructed from `config/dependencies.lock`.
+
+## Gate 2 measured discovery inputs
+
+The [reviewed report](reports/2026-09-05-gate-2-native-configure.md) records this current-host formula inventory (SHA-256 `7245d0f1b75d587823e0dd102187f4aef22e3e3fc4fd5ab73457353657bc18d1`). Required prefixes form the explicit CMake prefix list; each prefix's `lib/pkgconfig` and `share/pkgconfig` form the pkg-config path. The original CMake 4.4.2/inventory observation is retained separately in ignored evidence history; the table below describes the new canonical capture.
+
+| Formula | Version | Resolved prefix |
+| --- | --- | --- |
+| cmake | 4.4.3 | `/opt/homebrew/opt/cmake` |
+| ninja | 1.13.2 | `/opt/homebrew/opt/ninja` |
+| boost | 1.90.0_1 | `/opt/homebrew/opt/boost` |
+| bzip2 | 1.0.8 | `/opt/homebrew/opt/bzip2` |
+| zlib | 1.3.2 | `/opt/homebrew/opt/zlib` |
+| openssl@3 | 3.6.4 3.6.1 | `/opt/homebrew/opt/openssl@3` |
+| miniupnpc | 2.3.3 | `/opt/homebrew/opt/miniupnpc` |
+| leveldb | 1.23_2 | `/opt/homebrew/opt/leveldb` |
+| libmaxminddb | 1.13.3 | `/opt/homebrew/opt/libmaxminddb` |
+| snappy | 1.2.2 | `/opt/homebrew/opt/snappy` |
+| libiconv | 1.18 | `/opt/homebrew/opt/libiconv` |
+| pkgconf | 2.5.1 | `/opt/homebrew/opt/pkgconf` |
+| python@3.14 | 3.14.7 3.14.3_1 | `/opt/homebrew/opt/python@3.14` |
+| libnatpmp (optional) | absent | unresolved; `/opt/homebrew/opt/libnatpmp` is not installed |
+| tbb (optional) | absent | unresolved; `/opt/homebrew/opt/tbb` is not installed |
+
+Final configure explicitly uses `ENABLE_NATPMP=OFF` and `ENABLE_TBB=OFF`; optional installation/absence cannot select features implicitly. Threads resolves as the selected SDK interface, not a formula. Boost includes/library imports use the corresponding physical Cellar prefix. The current cache reports OpenSSL 3.6.4 through the selected opt prefix. Several required imports are dylibs; static Core policy does not establish a static dependency closure.
+
+No Phase 2 formula becomes a publication dependency or a `Dependencies` source pin. This inventory is measured host discovery, not `config/dependencies.lock` or final portability proof. Pinned dependency reconstruction and link closure remain later gates.
+
+## Gate 3 build observation
+
+The ARM64 static Core build used the same measured Homebrew formula inventory (SHA-256 `7245d0f1b75d587823e0dd102187f4aef22e3e3fc4fd5ab73457353657bc18d1`). The [Gate 3 report](reports/2026-09-20-gate-3-arm64-core-build.md) records the amended 13,202,392-byte archive, exact source pin, all 130 ARM64 object checks, and current imported-target locations. A static `libairdcpp.a` does not absorb these imported libraries.
+
+Homebrew LevelDB 1.23_2 exports `-Werror;-Wthread-safety` as its CMake target's compile interface. The Phase 3 wrapper removes only that transitive `-Werror`; the remaining upstream `HashStore.cpp:404` warning and its possible unchecked database-key length are **not** resolved by this adapter.
+
+## Gate 4 measured link closure
+
+The [Gate 4 report](reports/2026-09-21-gate-4-consumer-link.md) records a real all-member force-loaded external consumer. The stable direct logical items are BZip2, ZLIB, OpenSSL SSL, miniupnpc, LevelDB, MaxMindDB, and system Iconv. OpenSSL Crypto and Snappy remain physical transitive link items supplied by retained targets; Boost thread/regex and Threads are not direct fixed-point items for this consumer. No Apple framework was required.
+
+The measured physical interface still contains Homebrew BZip2 plus Homebrew zlib, OpenSSL, miniupnpc, LevelDB, MaxMindDB, and Snappy. The archive was compiled against the macOS iconv ABI, so Gate 4 uses the active SDK `libiconv.tbd` and the executable loads `/usr/lib/libiconv.2.dylib`; Homebrew GNU libiconv is not the correct ABI for this candidate. A narrow adapter also maps LevelDB's incomplete plain `snappy` metadata to the exact `Snappy::snappy` target.
+
+The Homebrew objects and dylibs emit linker warnings because they were built for macOS 26.0 while the consumer deployment target is 14.0. They prove discovery and link closure only. Phase 6 must pin or rebuild every non-system input and establish the intended minimum-macOS policy before publication.
+
+## Gate 5 distribution decision and evidence still required
+
+[ADR 0001](decisions/0001-aggregate-static-distribution.md) selects a single future aggregate archive. Its non-system component set is Core, BZip2, zlib, OpenSSL SSL and Crypto, miniupnpc, LevelDB, MaxMindDB, and Snappy. SDK Iconv remains an explicit external link input; libc++ and libSystem remain implicit Apple toolchain load commands. Gate 4 measured no Apple framework requirement.
+
+Phase 6 reconstructs pinned static inputs, checksums, notices, flags/patches, and minimum-macOS policy for that exact closure. Phase 7 owns aggregate member ordering, duplicate strong-symbol rejection, and weak/coalesced classification. Homebrew remains discovery evidence only. NAT-PMP/TBB remain OFF; WebSocket++ remains deferred unless later evidence makes it a Core dependency.
+
+## Phase 6 locked reconstruction
+
+`config/dependencies.lock` is canonical JSON. Its records bind exact versions, URLs, archive SHA-256/full Git commits, tree hashes/epochs, dependency order, adapters/options, expected headers/static archives/metadata, forbidden shared artifacts, platform policy, licenses, and tracked patch hashes. `python3 scripts/lib/dependency_lock.py validate` validates it; `fingerprint` prints its canonical SHA-256. A failed build does not justify loosening expected outputs or substituting source/hash values.
+
+The inventory is BZip2 1.0.8, zlib 1.3.2, OpenSSL 3.5.8, miniupnpc 2.3.3, LevelDB 1.23, libmaxminddb 1.13.3, Snappy 1.2.2, and Boost 1.90.0. OpenSSL deliberately uses the 3.5 LTS line rather than 3.6 discovery. Boost remains build-only; a reviewed lock-bound patch makes its installed CMake metadata relocatable and is applied only to a build copy. Full identities/notice paths are authoritative in the lock and report.
+
+Apple tools produce Release/static/ARM64 inputs with deployment target 14.0 and libc++. Homebrew supplies executable tools such as CMake/Ninja; library resolution uses isolated prefixes. SDK Iconv remains explicit and libc++/libSystem implicit. Snappy/LevelDB disable upstream GoogleTest suites unusable in this locked configuration; installed compression/database consumers compensate. Every required deterministic upstream check and installed consumer must pass under outbound network confinement, with localhost permitted for OpenSSL TLS tests.
+
+`Dependencies/<name>` owns immutable sources; `Build/dependencies/<name>` owns private execution and retry evidence; `Build/prefix/<name>` owns the complete validated install/notices. Validation checks expected artifacts, shared-library absence, member architectures/build versions where available, relocatable metadata, safe symlinks, and path leakage. Hash-bound manifests and source/adapter/tool fingerprints control reuse. These remain ingredients for Phase 7 aggregation and final attribution/provenance packaging.
+
+Each bounded adapter supports one exact ordered configure/build/install contract and component mapping. Changing an accepted lock array or adapter name requires a reviewed implementation change; otherwise execution refuses before source/build work rather than recording options it does not apply. Current full closure normalization rejects top-level response files in strict Phase 6 mode.
+
+The Core correction is separately bound by `config/core-reproducible-policy.json`: one three-file patch applies only to its manifest-verified private tracked-source stage. HashStore requires exactly 24 bytes before copying the key into its byte array; version generation uses fixed command authority and pinned epoch 1774518197/count zero; NetworkUtil uses the constant IPv6 maximum buffer. Original Source and dependency inputs remain unchanged, and strict warnings remain enabled. This does not relabel the historical Gate 3 warning or its unpatched candidate. Current staged-source/header provenance and both real version APIs are validated by the Phase 6 consumer.

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+case "$#:$*" in
+  0:) exec /bin/sh "$PROJECT_ROOT/scripts/lib/update_core.sh" "$PROJECT_ROOT" ;;
+  1:--dependencies) exec python3 "$PROJECT_ROOT/scripts/lib/dependency_acquire.py" --project-root "$PROJECT_ROOT" ;;
+  2:--dependencies\ --offline) exec python3 "$PROJECT_ROOT/scripts/lib/dependency_acquire.py" --project-root "$PROJECT_ROOT" --offline ;;
+  *) printf 'usage: scripts/update [--dependencies [--offline]]\n' >&2; exit 64 ;;
+esac
