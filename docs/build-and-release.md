@@ -2,7 +2,7 @@
 
 This is a concise operator-oriented phase map. The full contract is in [the design spec](superpowers/specs/2026-09-04-airdc-core-macos-design.md).
 
-Acquisition, native configure discovery, Core and consumer builds, the aggregate distribution decision, and the accepted Phase 6 inputs are implemented. Phase 7 provides validated deterministic packaging and a measured relocated consumer. Phase 8 provides public verification, scoped cleanup, and an opt-in two-clean-build/release-rehearsal driver; its native acceptance remains pending measured evidence and independent review.
+Acquisition, native configure discovery, Core and consumer builds, the aggregate distribution decision, and the accepted Phase 6 inputs are implemented. Phase 7 provides validated deterministic packaging and a measured relocated consumer. Phase 8 provides public verification, scoped cleanup, and an opt-in two-clean-build/release-rehearsal driver; its native acceptance passed measured verification and independent review under the approved two-clean-checkouts, same-host criterion. See the [Gate 8 report](reports/2026-10-04-gate-8-release-verification.md) for evidence and limitations.
 
 ## Required sequence
 
