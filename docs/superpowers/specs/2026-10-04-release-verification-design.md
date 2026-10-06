@@ -65,6 +65,13 @@ commit, config/lock/pins, toolchain, aggregate and full package hashes.
 
 ## Release rehearsal and acceptance
 
+On 2026-10-06 the user explicitly replaced original criterion 1 with:
+"Two independent clean checkouts on a declared supported Xcode/macOS host
+reconstruct exact source and dependency inputs from tracked configuration."
+This is an acceptance-scope change, not evidence of a fresh physical machine.
+The original design criterion is updated to the approved wording; the measured
+same-host clean builds satisfy it. All other acceptance criteria remain unchanged.
+
 Use a disposable local Git repository to exercise feature integration,
 release-from-develop, first-master bootstrap, annotated version tag, and
 merge-back. Confirm tag/master/release identity and develop reachability.

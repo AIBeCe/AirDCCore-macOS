@@ -61,15 +61,22 @@
 - [x] Diagnose only blockers; do not loosen archive/input policy to mask mismatches. Record any material new conflict for Root.
 - [x] Run isolated GitFlow rehearsal and cleanup safety tests; independent public verification and regression.
 - [x] Record exact commands/statuses, root ownership/clean start, pins/tool/OS identity, original/private versus normalized Core fingerprints, full Dist comparison and limits.
-- [x] Independent Task 3 implementation/spec/quality and native evidence/report accuracy review: PASS, no additional blocking findings; original fresh-machine acceptance remains unestablished.
-- [ ] Independently review Task 3 evidence and whole phase. Gate 8 only PASS if its measurable criteria are genuinely established. Commit completion docs, integrate via GitFlow and push only after PASS. If external state or release authorization prevents PASS, report exact remaining requirement without claiming completion.
+- [x] Independent Task 3 implementation/spec/quality and native evidence/report accuracy review: PASS, no additional blocking findings; original fresh-machine acceptance gap subsequently resolved by the explicit 2026-10-06 criterion replacement, not by a physical-machine test.
+- [x] Independently review Task 3 evidence and whole phase: PASS. Gate 8 PASS is established under the explicitly approved criterion replacement; completion documentation is accepted. Integrate via GitFlow, verify the merged checkout and push only after this accepted checkpoint. Production release remains a separate decision.
 
 Native experiment at frozen `5dc469927c3c0b897f1f572eba2ee0bef516840a`: PASS,
 all 28 commands; exact full Dist comparison; six cleanup fixtures and an isolated
 release rehearsal pass independently against each fresh implementation. Root
 independently revalidated the bound receipts. Report:
 `docs/reports/2026-10-04-gate-8-release-verification.md`.
-Original criterion 1 requires a fresh machine; both roots used the same declared
-host. That criterion is not established. Gate 8 and final Task 3 integration
-remain incomplete pending fresh-machine evidence or explicit user acceptance
-scope approval. Do not merge to develop or claim release readiness meanwhile.
+On 2026-10-06 the user explicitly replaced criterion 1 with:
+"Two independent clean checkouts on a declared supported Xcode/macOS host
+reconstruct exact source and dependency inputs from tracked configuration."
+The retained independent same-host builds satisfy this revised requirement;
+physical-machine and macOS 14 runtime tests are still not claimed. Final
+revalidation passed: exact receipt/inventory comparison, another genuine public
+consumer and all 257 Python tests (278.208 s). Independent acceptance-policy
+review passed. Gate 8 and Task 3 acceptance: PASS under the revised criterion.
+No implementation or acceptance work remains. Normal GitFlow finalization
+consumes this accepted checkpoint: integrate the feature, verify the merged
+checkout and push develop, without creating production refs or a release.

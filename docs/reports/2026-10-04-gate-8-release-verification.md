@@ -1,7 +1,14 @@
 # Gate 8 — independent verification and release rehearsal
 
-Updated: 2026-10-05. Native two-root experiment: PASS. Gate 8: INCOMPLETE;
-original acceptance criterion 1 has not been established on a fresh machine.
+Updated: 2026-10-06. Native two-root experiment: PASS. Gate 8: PASS under the
+explicitly revised criterion 1; physical-machine testing is not claimed.
+
+The user explicitly approved the following replacement on 2026-10-06:
+"Two independent clean checkouts on a declared supported Xcode/macOS host
+reconstruct exact source and dependency inputs from tracked configuration."
+The original fresh-machine requirement was not met and is not claimed.
+This approved scope change removes that acceptance gap; no other criterion,
+archive pin, build policy or verification requirement changes.
 
 ## Scope and current checkpoints
 
@@ -112,12 +119,13 @@ in their original locations; original Phase 6/7 native trees were not rebuilt.
 ## Acceptance map
 
 The original design section 19 is the binding fourteen-criterion contract.
-The native driver PASS is not an unconditional Gate 8 verdict. Same-host clean
-roots do not establish original criterion 1's fresh-machine requirement.
+The native driver PASS is not by itself an unconditional Gate 8 verdict.
+Criterion 1 below uses the user's explicit 2026-10-06 replacement; the retained
+evidence satisfies its independent clean-checkout requirement.
 
 | Criterion | Required evidence | Result |
 |---|---|---|
-| 1. Fresh supported machine reconstructs declared inputs | Two same-host fresh roots passed; no fresh-machine execution evidence | Not established; blocks Gate 8 |
+| 1. Two independent clean checkouts reconstruct declared inputs on a supported host | Two separately owned tracked-only roots independently acquired and verified all pinned inputs | PASS under explicitly revised criterion |
 | 2. Exact and idempotent upstream update | Pinned commit verified twice in each root, with no-op snapshots | PASS on measured host |
 | 3. Explicit native static build policy | Actual configured/compiler/object evidence and four public verifications | PASS on measured host |
 | 4. Locked dependency identities/licenses | Independently acquired and validated all eight locked sources/prefixes/licenses | PASS on measured host |
@@ -130,7 +138,7 @@ roots do not establish original criterion 1's fresh-machine requirement.
 | 11. Rerun safety and exact clean-build equality | Core identities and exact full Dist inventories match; acquisition/build no-ops | PASS on measured host |
 | 12. Safe cleanup | All six real-process safety fixtures pass independently against both implementations | PASS on measured host |
 | 13. No generated material tracked | Bound clean-start/index/status checks in both roots and feature | PASS |
-| 14. GitFlow and release-only production policy | Scoped reviews and isolated rehearsals passed; feature remains unmerged while Gate 8 is incomplete | PASS for policy/rehearsal; no production release claimed |
+| 14. GitFlow and release-only production policy | Scoped reviews and isolated rehearsals passed; feature integration follows Gate 8 acceptance | PASS for policy/rehearsal; no production release claimed |
 
 ## Claims boundary
 
@@ -141,14 +149,24 @@ separately from actual runtime evidence. A rehearsal tag does not designate a
 real release. No legal-compliance, notarization, signing or application
 integration conclusion follows from passing a static-library verification.
 
-## Remaining work
+## Completion and release boundary
 
 Task 3 native execution, equality comparison, cleanup fixtures and rehearsals
 are complete. Independent implementation/spec/quality and native evidence/report
-accuracy review: PASS, with no additional blocking findings. That review does
-not waive the original acceptance contract or authorize integration.
-Criterion 1 still needs fresh-machine evidence, or an explicit user-approved
-acceptance-scope change. Do not infer that change from approval of the identity
-or ordering fixes. Gate 8 and Phase 8 remain incomplete; no merge to develop,
-production promotion, release tagging or release publication is authorized by
-the native experiment PASS alone.
+accuracy review: PASS, with no additional blocking findings. The user's explicit
+2026-10-06 criterion replacement is recorded above and in both design documents.
+Final revalidation on 2026-10-06 passed: `compare_receipts` independently
+recomputed both full receipt bindings and exact inventories; `scripts/verify`
+performed another genuine relocated force-loaded public consumer; the full
+Python suite passed all 257 tests in 278.208 s. Logs are retained outside the
+project as `/private/tmp/phase8-final-comparison.log`,
+`/private/tmp/phase8-final-public-verify.log` and
+`/private/tmp/phase8-final-regression.log`.
+The same independent reviewer approved the exact acceptance-policy wording and
+confirmed the retained native evidence satisfies the revised criterion.
+Final independent spec, evidence and documentation review: PASS, with no blocking
+findings. Gate 8 and Task 3 acceptance are complete; no implementation or
+acceptance work remains. Normal GitFlow handoff integrates this accepted feature,
+verifies the merged checkout and pushes develop.
+Actual production promotion, release tagging and release publication remain
+separate decisions; none is authorized by this acceptance change.

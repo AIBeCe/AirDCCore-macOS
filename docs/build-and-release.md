@@ -248,6 +248,9 @@ integration; production promotion remains a separate decision.
 
 The recorded experiment at `5dc4699` passed both complete clean-root workflows,
 exact full Dist comparison, cleanup tests and isolated release rehearsals. The
-original fresh-machine criterion remains unestablished: Gate 8 is incomplete,
-and the feature must not merge to develop until that evidence exists or the user
-explicitly changes the acceptance scope. See the Gate 8 report in `docs/reports`.
+user explicitly replaced the fresh-machine criterion on 2026-10-06 with two
+independent clean checkouts on a declared supported Xcode/macOS host reconstructing
+exact source and dependency inputs from tracked configuration. The retained
+same-host evidence meets that revised scope; it does not prove a fresh physical
+machine or actual macOS 14 execution. Final revalidation/review precedes feature
+integration. See the Gate 8 report in `docs/reports`.
