@@ -1,86 +1,163 @@
 # AirDCCore-macOS
 
-AirDCCore-macOS is the source-acquisition, build, packaging, and verification project for a reproducible AirDC++ Core static distribution targeting macOS on Apple Silicon (`arm64`) only.
+Build and verify an AirDC++ Core static distribution for macOS Apple Silicon.
 
-Upstream acquisition, Phase 2 native configure-only discovery, the Phase 3 native `arm64` static Core build, Phase 4 external-consumer link discovery, and the Phase 5 distribution-shape decision are complete. Phase 6 implements locked dependency reconstruction, isolated static prefixes, and reproducible Core/consumer modes; Gate 6 acceptance is pending native verification and its evidence-backed report. The [accepted ADR](docs/decisions/0001-aggregate-static-distribution.md) selects one future aggregate `Dist/lib/libairdcpp.a`; aggregation, packaging, and `Dist` remain later work.
+The distribution contains public headers and one aggregate
+`libairdcpp.a`, including its non-system static dependencies.
+It uses C++20, Apple Clang, libc++, and Release optimization.
 
-The authoritative design is [docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md](docs/superpowers/specs/2026-09-04-airdc-core-macos-design.md). Shorter operational summaries live in:
+Intel builds, Objective-C++ wrappers, Swift Package Manager integration,
+and the client application are outside this repository's scope.
 
-- [docs/architecture.md](docs/architecture.md)
-- [docs/build-and-release.md](docs/build-and-release.md)
-- [docs/dependencies.md](docs/dependencies.md)
-- [docs/git-workflow.md](docs/git-workflow.md)
-- [docs/upstream-policy.md](docs/upstream-policy.md)
+## Requirements
 
-## Inspected upstream snapshot
+- An Apple Silicon Mac running macOS.
+- Xcode with its macOS SDK selected through `xcode-select`.
+- Git, Python 3, CMake, Ninja, Perl, Make, and Apple's build tools.
+- Internet access for initial source acquisition.
+- Several gigabytes of free space for sources and build artifacts.
 
-- Repository: <https://github.com/airdcpp/airdcpp-core>
-- Inspected commit: [`55d51ceb817ec006d4ec844d9e3788e1b0ccc352`](https://github.com/airdcpp/airdcpp-core/commit/55d51ceb817ec006d4ec844d9e3788e1b0ccc352)
-- Inspection date: 2026-09-04
-- Local checkout: `Source/airdcpp-core` (downloaded and ignored by this parent repository)
-
-## Scope boundary
-
-This repository will eventually produce headers, static library artifacts, provenance, dependency metadata, checksums, and licenses under `Dist`. It will not contain Objective-C++, Swift, Swift Package Manager integration, AppKit, application architecture, or client UI. Those concerns belong to later projects.
-
-The [reviewed Gate 2 report](docs/reports/2026-09-05-gate-2-native-configure.md) records measured configuration evidence. The [Gate 3 report](docs/reports/2026-09-20-gate-3-arm64-core-build.md) records the amended compiled archive and member-level ARM64 checks. The [Gate 4 report](docs/reports/2026-09-21-gate-4-consumer-link.md) records the real external consumer, fixed-point link interface, runtime evidence, and remaining publication limits. [ADR 0001](docs/decisions/0001-aggregate-static-distribution.md) turns that evidence into the Gate 5 publication-shape contract.
-
-Parent-repository work follows full GitFlow. `develop` is the integration branch and contains this baseline; `master` is reserved for production releases and will be created by the first release flow rather than seeded with design work.
-
-## Upstream acquisition
-
-Run `./scripts/update` from any directory to acquire or validate the pinned AirDC++ Core checkout. The no-argument form reads `config/upstream.env` and leaves a correct checkout detached at the exact configured commit. `./scripts/update --dependencies` reconstructs the eight sources from `config/dependencies.lock`; add `--offline` to require verified caches. See [the acquisition contract](docs/upstream.md).
-
-The command refuses dirty, symlinked, non-Git, unignored, or wrong-origin destinations. A correct checkout is a no-op and does not contact the network. Run offline tests with `./tests/upstream_config_test.sh` and `./tests/update_test.sh`.
-
-## Native configure-only discovery
+Homebrew can provide the host tools:
 
 ```sh
-./scripts/update
-./scripts/build --configure-only
-AIRDCCORE_RUN_CONFIGURE_TESTS=1 ./tests/gate2_configure_test.sh
+brew install cmake ninja python
 ```
 
-The first command reconstructs or validates pinned Source; the second configures only; the third opts into the real Gate 2 check and validates the tracked report. Run on native macOS arm64 with Xcode and the [recorded Homebrew formulas](docs/dependencies.md). Homebrew inputs are discovery-only, not publication dependencies. Evidence stays under `Build/airdcpp-core`; no Core target is compiled, no `Dependencies` or `Dist` is created, and Phase 3 compilation remains outside this command. See the [operator contract](docs/build-and-release.md) for evidence reuse and the hard stop.
+Dependencies are built from locked sources, not Homebrew libraries.
 
-## Native static Core build (Phase 3)
+The validated build host used macOS 26.5.1, macOS SDK 26.5,
+Apple Clang 21.0.0, CMake 4.4.3, Ninja 1.13.2, and Python 3.14.7.
+Publication checks validate the recorded compiler/tool identities.
+A different toolchain may be rejected and requires separate validation.
+
+The deployment target is macOS 14.0. This is not a claim that runtime
+behavior has been tested on every macOS version since 14.0.
+
+## Download
+
+Clone the release:
 
 ```sh
-./scripts/update
-./scripts/build --build-core
-AIRDCCORE_RUN_BUILD_TESTS=1 ./tests/gate3_core_build_test.sh
+git clone --branch v1.0.0 https://github.com/AIBeCe/AirDCCore-macOS.git
+cd AirDCCore-macOS
 ```
 
-This separate mode builds only the `airdcpp` target under `Build/airdcpp-core/core-release`; it preserves command, input, failure-attempt, and archive-inspection evidence. The current candidate is `core-release/upstream/libairdcpp.a`, with 130 ARM64 object members. The opt-in gate checks the already-built archive and does not compile it again. It does not create `Dist`. See the [Gate 3 report](docs/reports/2026-09-20-gate-3-arm64-core-build.md) for the compiler failure, reviewed adapters, deterministic source-path policy, warnings, and precise limits.
+Use Git clone; GitHub source ZIP/tar downloads cannot run these build scripts.
+No precompiled binary download is provided by these instructions.
 
-## External consumer link discovery (Phase 4)
+The release tag identifies this distribution project. The original
+AirDC++ Core and dependency versions are recorded separately in
+`config/upstream.env` and `config/dependencies.lock`.
 
-```sh
-./scripts/update
-./scripts/build --build-core
-./scripts/build --link-consumer
-AIRDCCORE_RUN_LINK_TESTS=1 ./tests/gate4_consumer_link_test.sh
-```
+## Build from source
 
-`--link-consumer` reuses an already-verified Gate 3 candidate; it does not rebuild Core. It stages headers and the archive below ignored `Build/airdcpp-core/link-interface`, force-loads every Core object into a standalone C++20 executable, measures the dependency fixed point, and runs the consumer. The live gate independently checks the bound inputs, ARM64 executable, real Core symbols, omission matrix, runtime identity, and path-leak boundary. No distributable output, `Dependencies`, or `Dist` is created. See the [Gate 4 report](docs/reports/2026-09-21-gate-4-consumer-link.md).
-
-## Distribution-shape decision (Phase 5)
-
-```sh
-./tests/gate5_distribution_shape_test.sh
-```
-
-Gate 5 is a tracked decision, not a packaging command. The accepted shape is one future aggregate `Dist/lib/libairdcpp.a` containing Core plus the pinned non-system static closure measured at Gate 4. macOS SDK Iconv, libc++, and libSystem remain external and machine-readable. The unchanged Gate 5 test requires `Dependencies` absent; run it in a fresh tracked-only checkout once Phase 6 sources exist in the active checkout.
-
-## Reproducible dependency inputs (Phase 6)
+Run these commands in order from the repository root:
 
 ```sh
 ./scripts/update
 ./scripts/update --dependencies
 ./scripts/build --build-dependencies
+mkdir -p Build/airdcpp-core
 ./scripts/build --build-reproducible-core
 ./scripts/build --link-reproducible-consumer
-AIRDCCORE_RUN_DEPENDENCY_TESTS=1 ./tests/gate6_dependency_build_test.sh
+./scripts/package
+./scripts/verify
 ```
 
-The eight prefixes live in `Build/prefix/<name>`. Core and its external consumer use those validated static inputs plus Apple SDK/system libraries. Homebrew supplies host tools. Core compiles a manifest-verified private source stage with the reviewed three-file patch and deterministic version authority; the original checkout remains unchanged. The live Gate 6 process and its descendants run under an outbound-network-denying macOS sandbox, with localhost allowed for upstream TLS tests. The gate checks unchanged dependency reruns, real Core/consumer, ADR closure, generated-path boundaries, and the [normalized report](docs/reports/2026-09-23-gate-6-reproducible-dependencies.md). Fresh post-review acquisition/native proof, the accepted report contract and final full Gate 6 PASS are recorded; independently reviewed completion docs precede local integration. Without its opt-in variable the gate skips. `./tests/gate6_contract_test.sh --self-test` runs disposable offline report and sandbox fixtures. See [the operator contract](docs/build-and-release.md) for freeze, logging, retry, and Phase 7/8 boundaries. Phase 6 creates neither `Dist` nor an aggregate archive.
+No Git submodules are required. Acquisition validates the locked inputs.
+Builds use private staging directories without modifying original sources.
+
+The private consumer step must run before packaging creates `Dist`.
+The final verification independently checks the packaged distribution
+and compiles, links, and runs a relocated C++ consumer.
+
+## Output
+
+```text
+Dist/
+├── include/       Public Core and dependency headers
+├── lib/
+│   └── libairdcpp.a
+├── licenses/      License texts and notices
+└── metadata/      Manifests, checksums, provenance, and link interface
+```
+
+`Dist/lib/libairdcpp.a` is a thin ARM64 archive, not a universal binary.
+It aggregates Core and the required non-system static archives.
+
+SDK Iconv remains an explicit link dependency. libc++ and libSystem
+remain system dependencies; no Apple frameworks are required.
+
+## Using the library
+
+Compile consumers with C++20, libc++, ARM64, a macOS deployment target
+of 14.0 or later, and `NO_CLIENT_UPDATER` defined.
+
+Add these include directories:
+
+```text
+Dist/include
+Dist/include/airdcpp
+```
+
+Link `Dist/lib/libairdcpp.a` and SDK Iconv (`-liconv`).
+See `Dist/metadata/link-interface.json` for the packaged link contract.
+
+Some Core headers require their normal parent/header context.
+The public verifier checks those contexts and force-loads the archive
+to verify its complete link closure.
+
+OpenSSL configuration, certificates, and provider paths are runtime
+integration concerns. The build uses stable upstream defaults rather
+than temporary build paths; applications may override them.
+These runtime resources are not supplied automatically.
+
+## Verify or rebuild
+
+Verify an existing distribution:
+
+```sh
+./scripts/verify
+```
+
+For a full rebuild, first run:
+
+```sh
+./scripts/clean
+```
+
+This removes validated generated `Build` and `Dist` directories,
+including their build evidence. It retains downloaded sources.
+Then repeat the build commands above.
+
+Scripts reject unsafe paths, dirty source checkouts, incorrect pins,
+and invalid evidence. Do not bypass these checks to publish an artifact.
+
+## Project structure
+
+- `Source/airdcpp-core`: downloaded, pinned original Core source.
+- `Dependencies`: downloaded, locked dependency sources.
+- `Build`: generated builds, static prefixes, and verification evidence.
+- `Dist`: generated distribution.
+- `config`: tracked pins and build/publication policies.
+- `cmake`: tracked CMake integration.
+- `scripts`: acquisition, build, packaging, cleanup, and verification.
+- `tests` and `smoke-test`: regression and real-consumer checks.
+- `docs`: architecture, decisions, operational guides, and gate reports.
+
+Downloaded and generated directories are ignored by Git.
+
+## Documentation
+
+- [Build and release](docs/build-and-release.md)
+- [Dependencies](docs/dependencies.md)
+- [Architecture](docs/architecture.md)
+- [Upstream policy](docs/upstream-policy.md)
+
+## Licensing
+
+AirDC++ Core carries GPL-3.0-or-later notices. Dependencies have their
+own licenses. Review the packaged license texts, notices, and provenance
+before redistributing or incorporating the library into an application.
+
+The tracked GPL text is available at [licenses/GPL-3.0.txt](licenses/GPL-3.0.txt).
