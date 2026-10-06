@@ -572,7 +572,7 @@ These items are unresolved by design because they require build evidence. They a
 
 The project is complete for its initial distribution milestone only when all of the following are true:
 
-1. A fresh machine with a declared supported Xcode/macOS environment can reconstruct exact source and dependency inputs from tracked configuration.
+1. Two independent clean checkouts on a declared supported Xcode/macOS host reconstruct exact source and dependency inputs from tracked configuration.
 2. `scripts/update` verifies the full upstream commit and is idempotent.
 3. `scripts/build` uses Apple Clang/libc++, Release, one explicit deployment target, and `arm64` only.
 4. Every non-system dependency is pinned by commit or version plus integrity hash and has recorded license provenance.

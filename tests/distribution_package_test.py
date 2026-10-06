@@ -177,6 +177,62 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(verified["member_count"], 9)
         self.assertEqual([p.name for p in (relocated / "lib").iterdir()], ["libairdcpp.a"])
 
+    def test_schema_two_package_pins_public_identity_after_relocation(self):
+        from public_core_identity import public_core_fingerprint
+        core = Path(self.result["core"]["staged_root"]).parent
+        authority = dict(schema=1, staged_root=str(core / "source"),
+            generator_sha256="c" * 64, upstream_commit=self.result["core"]["upstream_commit"])
+        authority_digest = self.aggregate.sha(self.aggregate.canonical(authority))
+        inputs = dict(schema=1, version_authority_sha256=authority_digest,
+            implementation=[dict(path="core_stage.py", sha256="d" * 64)])
+        raw_digest = self.aggregate.sha(self.aggregate.canonical(inputs))
+        (core / "version-authority.json").write_bytes(self.aggregate.canonical(authority))
+        (core / "core-inputs.json").write_bytes(self.aggregate.canonical(inputs))
+        (core / "core-input-fingerprint.txt").write_text(raw_digest + "\n")
+        self.result["core"].update(version_authority_sha256=authority_digest, core_input_fingerprint=raw_digest)
+        public_digest = public_core_fingerprint(core, self.result["core"])
+        self.assertNotEqual(raw_digest, public_digest)
+        self.result["provenance"]["components"][0]["core_input_fingerprint"] = public_digest
+        policy_path = self.project / "config/packaging-core-policy.json"
+        policy = json.loads(policy_path.read_bytes())
+        policy["schema_version"] = 2
+        policy["core_input_fingerprint"] = public_digest
+        policy_path.write_bytes(self.aggregate.canonical(policy))
+        try:
+            self.stage()
+        except ValueError as error:
+            self.fail("schema-two publication must succeed: " + str(error))
+        manifest = json.loads((self.candidate / "metadata/manifest.json").read_bytes())
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["components"][0]["core_input_fingerprint"], policy["core_input_fingerprint"])
+        self.assertNotEqual(manifest["components"][0]["core_input_fingerprint"], raw_digest)
+        relocated = self.work / "schema-two-relocated"
+        self.candidate.rename(relocated)
+        shutil.rmtree(self.project / "Build")
+        shutil.rmtree(self.project / "Dependencies")
+        self.assertEqual(self.package.verify_package(relocated, self.project)["member_count"], 9)
+        for field in ("core_input_fingerprint", "archive_sha256"):
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(manifest))
+                changed["components"][0][field] = "0" * 64
+                provenance_path = relocated / "metadata/aggregate-provenance.json"
+                provenance = json.loads(provenance_path.read_bytes())
+                provenance["components"] = changed["components"]
+                provenance_path.write_bytes(self.aggregate.canonical(provenance))
+                (relocated / "metadata/manifest.json").write_bytes(self.aggregate.canonical(changed))
+                self.resign(relocated)
+                with self.assertRaisesRegex(ValueError, "Core.*identity"):
+                    self.package.verify_package(relocated, self.project)
+
+    def test_legacy_schema_one_cannot_use_schema_two_authority(self):
+        self.stage()
+        path = self.project / "config/packaging-core-policy.json"
+        policy = json.loads(path.read_bytes())
+        policy["schema_version"] = 2
+        path.write_bytes(self.aggregate.canonical(policy))
+        with self.assertRaisesRegex(ValueError, "schema"):
+            self.package.verify_package(self.candidate, self.project)
+
     def test_header_source_drift_rejects_copy(self):
         (self.project / "Build/prefix/zlib/include/zlib.h").write_text("drift\n")
         with self.assertRaisesRegex(ValueError, "header.*digest"):
